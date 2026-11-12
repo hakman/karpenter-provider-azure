@@ -73,7 +73,6 @@ var _ = Describe("Options", func() {
 		"LINUX_ADMIN_USERNAME",
 		"ADDITIONAL_TAGS",
 		"ADDITIONAL_VNETS",
-		"NIC_IP_FORWARDING",
 		"ENABLE_AZURE_SDK_LOGGING",
 		"ENABLE_FIPS",
 		"AKS_MACHINES_POOL_NAME",
@@ -202,7 +201,6 @@ var _ = Describe("Options", func() {
 			os.Setenv("LINUX_ADMIN_USERNAME", "customadminusername")
 			os.Setenv("ADDITIONAL_TAGS", "test-tag=test-value")
 			os.Setenv("ADDITIONAL_VNETS", "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/sillygeese/providers/Microsoft.Network/virtualNetworks/remote-vnet=otherregion")
-			os.Setenv("NIC_IP_FORWARDING", "true")
 			os.Setenv("ENABLE_FIPS", "true")
 			os.Setenv("AKS_MACHINES_POOL_NAME", "mpool")
 			os.Setenv("MANAGE_EXISTING_AKS_MACHINES", "true")
@@ -239,7 +237,6 @@ var _ = Describe("Options", func() {
 				KubeletIdentityClientID:        lo.ToPtr("12345678-1234-1234-1234-123456789012"),
 				AdditionalTags:                 map[string]string{"test-tag": "test-value"},
 				AdditionalVNETs:                map[string]string{"/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/sillygeese/providers/Microsoft.Network/virtualNetworks/remote-vnet": "otherregion"},
-				NICIPForwarding:                lo.ToPtr(true),
 				EnableFIPS:                     lo.ToPtr(true),
 				ClusterDNSServiceIP:            lo.ToPtr("10.244.0.1"),
 				ManageExistingAKSMachines:      lo.ToPtr(true),

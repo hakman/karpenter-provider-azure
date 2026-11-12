@@ -352,21 +352,6 @@ var _ = Describe("InstanceType Provider", func() {
 				Expect(lo.FromPtr(vm.Location)).To(Equal("otherregion"))
 				Expect(vm.Zones).To(BeEmpty())
 			})
-			DescribeTable("should set IP forwarding on the network interface from nic-ip-forwarding", func(nicIPForwarding bool) {
-				ctx = options.ToContext(ctx, test.Options(test.OptionsFields{
-					NICIPForwarding: lo.ToPtr(nicIPForwarding),
-				}))
-				ExpectApplied(ctx, env.Client, nodePool, nodeClass)
-				pod := coretest.UnschedulablePod()
-				ExpectProvisionedAndWaitForPromises(ctx, env.Client, cluster, cloudProvider, coreProvisioner, azureEnv, pod)
-				ExpectScheduled(ctx, env.Client, pod)
-
-				nic := azureEnv.NetworkInterfacesAPI.NetworkInterfacesCreateOrUpdateBehavior.CalledWithInput.Pop()
-				Expect(lo.FromPtr(nic.Interface.Properties.EnableIPForwarding)).To(Equal(nicIPForwarding))
-			},
-				Entry("when unset", false),
-				Entry("when set", true),
-			)
 		})
 		Context("VM Creation Failures", func() {
 			It("should not reattempt creation of a vm thats been created before", func() {

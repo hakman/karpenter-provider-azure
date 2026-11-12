@@ -117,8 +117,6 @@ type Options struct {
 	// [EXPERIMENTAL] VNets other than the cluster VNet whose subnets AKSNodeClass.spec.vnetSubnetID may reference,
 	// keyed by VNet resource ID, with the VNet location as value. Consumers must use AdditionalVNETLocation.
 	AdditionalVNETs map[string]string `json:"additionalVnets,omitempty"`
-	// [EXPERIMENTAL] Enables IP forwarding on node NICs, so nodes accept traffic routed to their pod CIDR by user-defined routes.
-	NICIPForwarding bool `json:"nicIPForwarding,omitempty"`
 
 	ProvisionMode              string            `json:"provisionMode,omitempty"`
 	NodeBootstrappingServerURL string            `json:"-"`
@@ -188,7 +186,6 @@ func (o *Options) AddFlags(fs *coreoptions.FlagSet) {
 		panic(fmt.Sprintf("failed to parse ADDITIONAL_VNETS from string %q: %s", env.WithDefaultString("ADDITIONAL_VNETS", ""), err))
 	}
 	fs.Var(additionalVNETsFlag, "additional-vnets", "[EXPERIMENTAL] VNets other than the cluster VNet whose subnets AKSNodeClass.spec.vnetSubnetID may reference. Format is vnetResourceID1=location1,vnetResourceID2=location2. The VNets must be in the cluster subscription and peered with the cluster VNet. Nodes in these VNets are created in the VNet location, without the cluster load balancer backend pools and managed network security group, so the subnets need their own outbound connectivity and network security group. In a location other than the cluster location nodes are regional (non-zonal) VMs, and instance types and images are still resolved for the cluster location.")
-	fs.BoolVar(&o.NICIPForwarding, "nic-ip-forwarding", env.WithDefaultBool("NIC_IP_FORWARDING", false), "[EXPERIMENTAL] If set to true, IP forwarding is enabled on node network interfaces.")
 	fs.BoolVar(&o.EnableAzureSDKLogging, "enable-azure-sdk-logging", env.WithDefaultBool("ENABLE_AZURE_SDK_LOGGING", true), "If set to false then Azure SDK middleware logging is disabled for debugging, and won't be logging all HTTP requests/responses to Azure APIs.")
 }
 

@@ -45,7 +45,6 @@ type OptionsFields struct {
 	NodeBootstrappingServerURL     *string
 	VnetGUID                       *string
 	AdditionalVNETs                map[string]string
-	NICIPForwarding                *bool
 	KubeletIdentityClientID        *string
 	AdditionalTags                 map[string]string
 	EnableAzureSDKLogging          *bool
@@ -85,7 +84,6 @@ func Options(overrides ...OptionsFields) *azoptions.Options {
 		NetworkPolicy:                  lo.FromPtrOr(options.NetworkPolicy, "cilium"),
 		VnetGUID:                       lo.FromPtrOr(options.VnetGUID, "a519e60a-cac0-40b2-b883-084477fe6f5c"),
 		AdditionalVNETs:                options.AdditionalVNETs,
-		NICIPForwarding:                lo.FromPtrOr(options.NICIPForwarding, false),
 		NetworkDataplane:               lo.FromPtrOr(options.NetworkDataplane, "cilium"),
 		VMMemoryOverheadPercent:        lo.FromPtrOr(options.VMMemoryOverheadPercent, 0.075),
 		EnableNodeHardening:            lo.FromPtrOr(options.EnableNodeHardening, false),

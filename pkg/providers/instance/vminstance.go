@@ -530,7 +530,7 @@ func (p *DefaultVMProvider) newNetworkInterfaceForVM(opts *createNICOptions) arm
 			},
 			NetworkSecurityGroup:        nsgRef,
 			EnableAcceleratedNetworking: lo.ToPtr(enableAcceleratedNetworking),
-			EnableIPForwarding:          lo.ToPtr(opts.EnableIPForwarding),
+			EnableIPForwarding:          lo.ToPtr(false),
 		},
 	}
 	if opts.NetworkPlugin == consts.NetworkPluginAzure && opts.NetworkPluginMode != consts.NetworkPluginModeOverlay {
@@ -566,7 +566,6 @@ type createNICOptions struct {
 	NetworkPluginMode      string
 	MaxPods                int32
 	NetworkSecurityGroupID string
-	EnableIPForwarding     bool
 	Location               string
 }
 
@@ -968,7 +967,6 @@ func (p *DefaultVMProvider) beginLaunchInstance(
 		BackendPools:           backendPools,
 		InstanceType:           instanceType,
 		NetworkSecurityGroupID: nsgID,
-		EnableIPForwarding:     options.FromContext(ctx).NICIPForwarding,
 		Location:               location,
 	}
 
