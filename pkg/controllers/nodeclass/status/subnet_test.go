@@ -198,6 +198,47 @@ var _ = Describe("SubnetStatus", func() {
 			Expect(cond.Message).To(ContainSubstring("custom subnet cannot be in the same VNet as cluster managed VNet"))
 		})
 
+		It("should mark nodeclass as not ready when subnet is in another VNet", func() {
+			nodeClass.Spec.VNETSubnetID = lo.ToPtr("/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/remote-rg/providers/Microsoft.Network/virtualNetworks/remote-vnet/subnets/nodes")
+
+			result, err := reconciler.Reconcile(ctx, nodeClass)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result).To(Equal(reconcile.Result{}))
+
+			cond := nodeClass.StatusConditions().Get(v1beta1.ConditionTypeSubnetsReady)
+			Expect(cond.IsFalse()).To(BeTrue())
+			Expect(cond.Reason).To(Equal("SubnetIDInvalid"))
+			Expect(cond.Message).To(ContainSubstring("vnetSubnetID does not match the cluster subscription, resource group, or virtual network"))
+		})
+
+		It("should mark nodeclass as ready when subnet is in a VNet listed in additional-vnet-guids", func() {
+			additionalVNETCtx := options.ToContext(ctx, test.Options(test.OptionsFields{
+				AdditionalVNETGUIDs: map[string]string{"/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/remote-rg/providers/Microsoft.Network/virtualNetworks/remote-vnet": "b629f70b-dbd1-41c3-9c94-195588af7a6d"},
+			}))
+			nodeClass.Spec.VNETSubnetID = lo.ToPtr("/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/remote-rg/providers/Microsoft.Network/virtualNetworks/remote-vnet/subnets/nodes")
+
+			azureEnv.SubnetsAPI.GetFunc = func(ctx context.Context, resourceGroupName string, virtualNetworkName string, subnetName string, options *armnetwork.SubnetsClientGetOptions) (armnetwork.SubnetsClientGetResponse, error) {
+				Expect(resourceGroupName).To(Equal("remote-rg"))
+				Expect(virtualNetworkName).To(Equal("remote-vnet"))
+				Expect(subnetName).To(Equal("nodes"))
+
+				return armnetwork.SubnetsClientGetResponse{
+					Subnet: armnetwork.Subnet{
+						Properties: &armnetwork.SubnetPropertiesFormat{
+							AddressPrefix: lo.ToPtr("10.1.0.0/16"),
+						},
+					},
+				}, nil
+			}
+
+			result, err := reconciler.Reconcile(additionalVNETCtx, nodeClass)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result).To(Equal(reconcile.Result{RequeueAfter: time.Minute * 3}))
+
+			cond := nodeClass.StatusConditions().Get(v1beta1.ConditionTypeSubnetsReady)
+			Expect(cond.IsTrue()).To(BeTrue())
+		})
+
 		It("should mark nodeclass as not ready when subnet hits unknown error", func() {
 			const errString = "An unexpected internal server error occurred while processing the request. The service encountered an unrecoverable condition and was unable to complete the operation. Please retry the request after some time. If the problem persists, contact Azure support with the correlation ID and timestamp for further investigation."
 			azureEnv.SubnetsAPI.GetFunc = func(ctx context.Context, resourceGroupName string, virtualNetworkName string, subnetName string, options *armnetwork.SubnetsClientGetOptions) (armnetwork.SubnetsClientGetResponse, error) {

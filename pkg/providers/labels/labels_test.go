@@ -465,6 +465,66 @@ func TestDoNotSyncTaintsLabel(t *testing.T) {
 	g.Expect(labelMap[karpv1.NodeDoNotSyncTaintsLabelKey]).To(Equal("true"))
 }
 
+func TestVNetGUIDLabel(t *testing.T) {
+	const (
+		clusterVNETGUID    = "a519e60a-cac0-40b2-b883-084477fe6f5c"
+		additionalVNETID   = "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/remote-rg/providers/Microsoft.Network/virtualNetworks/remote-vnet"
+		additionalVNETGUID = "b629f70b-dbd1-41c3-9c94-195588af7a6d"
+	)
+	testCases := []struct {
+		name         string
+		vnetSubnetID *string
+		expectedGUID string
+	}{
+		{
+			name:         "cluster subnet gets the cluster VNet GUID",
+			expectedGUID: clusterVNETGUID,
+		},
+		{
+			name:         "subnet in an additional VNet gets that VNet's GUID",
+			vnetSubnetID: lo.ToPtr(additionalVNETID + "/subnets/nodes"),
+			expectedGUID: additionalVNETGUID,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			ctx := options.ToContext(context.Background(), &options.Options{
+				NodeResourceGroup:       "test-rg",
+				KubeletIdentityClientID: "test-client-id",
+				NetworkPlugin:           "azure",
+				NetworkPluginMode:       "overlay",
+				SubnetID:                "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/test/providers/Microsoft.Network/virtualNetworks/test/subnets/test",
+				VnetGUID:                clusterVNETGUID,
+				AdditionalVNETGUIDs:     map[string]string{additionalVNETID: additionalVNETGUID},
+			})
+
+			nodeClass := &v1beta1.AKSNodeClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-nodeclass",
+				},
+				Spec: v1beta1.AKSNodeClassSpec{
+					VNETSubnetID: tc.vnetSubnetID,
+				},
+				Status: v1beta1.AKSNodeClassStatus{
+					KubernetesVersion: lo.ToPtr("1.35.0"),
+					Conditions: []status.Condition{
+						{
+							Type:   v1beta1.ConditionTypeKubernetesVersionReady,
+							Status: metav1.ConditionTrue,
+						},
+					},
+				},
+			}
+
+			labelMap, err := labels.Get(ctx, nodeClass, "amd64", localDNSCapableSKU())
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(labelMap).To(HaveKeyWithValue(labels.AKSLabelVNetGUID, tc.expectedGUID))
+		})
+	}
+}
+
 func TestLabelsGet(t *testing.T) {
 	testCases := []struct {
 		name              string

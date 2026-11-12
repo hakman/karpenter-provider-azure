@@ -42,6 +42,7 @@ func (o *Options) Validate() error {
 		o.validateNetworkingOptions(),
 		o.validateVMMemoryOverheadPercent(),
 		o.validateVnetSubnetID(),
+		o.validateAdditionalVNETGUIDs(),
 		o.validateProvisionMode(),
 		o.validateUseSIG(),
 		o.validateAdminUsername(),
@@ -97,6 +98,33 @@ func (o *Options) validateVnetSubnetID() error {
 	_, err := utils.GetVnetSubnetIDComponents(o.SubnetID)
 	if err != nil {
 		return fmt.Errorf("vnet-subnet-id is invalid: %w", err)
+	}
+	return nil
+}
+
+func (o *Options) validateAdditionalVNETGUIDs() error {
+	if len(o.AdditionalVNETGUIDs) == 0 {
+		return nil
+	}
+	clusterSubnet, err := utils.GetVnetSubnetIDComponents(o.SubnetID)
+	if err != nil {
+		return nil // reported by validateVnetSubnetID
+	}
+	for vnetID, guid := range o.AdditionalVNETGUIDs {
+		// Reuse the subnet parser by appending a placeholder subnet name
+		vnet, err := utils.GetVnetSubnetIDComponents(vnetID + "/subnets/any")
+		if err != nil {
+			return fmt.Errorf("additional-vnet-guids key %q is not a valid vnet resource ID", vnetID)
+		}
+		if !strings.EqualFold(vnet.SubscriptionID, clusterSubnet.SubscriptionID) {
+			return fmt.Errorf("additional-vnet-guids key %q must be in the cluster subscription %s", vnetID, clusterSubnet.SubscriptionID)
+		}
+		if strings.EqualFold(vnet.VNetID(), clusterSubnet.VNetID()) {
+			return fmt.Errorf("additional-vnet-guids key %q must not be the cluster vnet", vnetID)
+		}
+		if uuid.Validate(guid) != nil {
+			return fmt.Errorf("additional-vnet-guids value %q for %q is not a valid vnet guid", guid, vnetID)
+		}
 	}
 	return nil
 }

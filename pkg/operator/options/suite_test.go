@@ -72,6 +72,8 @@ var _ = Describe("Options", func() {
 		"KUBELET_IDENTITY_CLIENT_ID",
 		"LINUX_ADMIN_USERNAME",
 		"ADDITIONAL_TAGS",
+		"ADDITIONAL_VNET_GUIDS",
+		"NIC_IP_FORWARDING",
 		"ENABLE_AZURE_SDK_LOGGING",
 		"ENABLE_FIPS",
 		"AKS_MACHINES_POOL_NAME",
@@ -199,6 +201,8 @@ var _ = Describe("Options", func() {
 			os.Setenv("KUBELET_IDENTITY_CLIENT_ID", "12345678-1234-1234-1234-123456789012")
 			os.Setenv("LINUX_ADMIN_USERNAME", "customadminusername")
 			os.Setenv("ADDITIONAL_TAGS", "test-tag=test-value")
+			os.Setenv("ADDITIONAL_VNET_GUIDS", "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/sillygeese/providers/Microsoft.Network/virtualNetworks/remote-vnet=b629f70b-dbd1-41c3-9c94-195588af7a6d")
+			os.Setenv("NIC_IP_FORWARDING", "true")
 			os.Setenv("ENABLE_FIPS", "true")
 			os.Setenv("AKS_MACHINES_POOL_NAME", "mpool")
 			os.Setenv("MANAGE_EXISTING_AKS_MACHINES", "true")
@@ -234,6 +238,8 @@ var _ = Describe("Options", func() {
 				NodeResourceGroup:              lo.ToPtr("my-node-rg"),
 				KubeletIdentityClientID:        lo.ToPtr("12345678-1234-1234-1234-123456789012"),
 				AdditionalTags:                 map[string]string{"test-tag": "test-value"},
+				AdditionalVNETGUIDs:            map[string]string{"/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/sillygeese/providers/Microsoft.Network/virtualNetworks/remote-vnet": "b629f70b-dbd1-41c3-9c94-195588af7a6d"},
+				NICIPForwarding:                lo.ToPtr(true),
 				EnableFIPS:                     lo.ToPtr(true),
 				ClusterDNSServiceIP:            lo.ToPtr("10.244.0.1"),
 				ManageExistingAKSMachines:      lo.ToPtr(true),
@@ -327,6 +333,30 @@ var _ = Describe("Options", func() {
 				Expect(err).ToNot(HaveOccurred(), "mode %q should be valid", mode)
 			}
 		})
+		DescribeTable("should validate additional-vnet-guids", func(value string, errMsg string) {
+			err := opts.Parse(
+				fs,
+				"--cluster-name", "my-name",
+				"--cluster-endpoint", "https://karpenter-000000000000.hcp.westus2.staging.azmk8s.io",
+				"--kubelet-bootstrap-token", "flag-bootstrap-token",
+				"--ssh-public-key", "flag-ssh-public-key",
+				"--vnet-subnet-id", "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/sillygeese/providers/Microsoft.Network/virtualNetworks/karpentervnet/subnets/karpentersub",
+				"--node-resource-group", "my-node-rg",
+				"--additional-vnet-guids", value,
+			)
+			if errMsg == "" {
+				Expect(err).ToNot(HaveOccurred())
+				return
+			}
+			Expect(err).To(MatchError(ContainSubstring(errMsg)))
+		},
+			Entry("a peered vnet in the cluster subscription", "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/sillygeese/providers/Microsoft.Network/virtualNetworks/remote-vnet=b629f70b-dbd1-41c3-9c94-195588af7a6d", ""),
+			Entry("the cluster vnet", "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/sillygeese/providers/Microsoft.Network/virtualNetworks/KarpenterVNet=b629f70b-dbd1-41c3-9c94-195588af7a6d", "must not be the cluster vnet"),
+			Entry("a vnet in another subscription", "/subscriptions/87654321-1234-1234-1234-123456789012/resourceGroups/sillygeese/providers/Microsoft.Network/virtualNetworks/remote-vnet=b629f70b-dbd1-41c3-9c94-195588af7a6d", "must be in the cluster subscription"),
+			Entry("a malformed vnet guid", "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/sillygeese/providers/Microsoft.Network/virtualNetworks/remote-vnet=null", "is not a valid vnet guid"),
+			Entry("a key that is not a vnet resource ID", "remote-vnet=b629f70b-dbd1-41c3-9c94-195588af7a6d", "is not a valid vnet resource ID"),
+		)
+
 		It("should fail when vnet guid is not a uuid", func() {
 			errMsg := "vnet-guid null is malformed"
 			err := opts.Parse(

@@ -114,6 +114,12 @@ type Options struct {
 	SystemNamespace         string   `json:"systemNamespace,omitempty"`
 	setFlags                map[string]bool
 
+	// [EXPERIMENTAL] VNets other than the cluster VNet whose subnets AKSNodeClass.spec.vnetSubnetID may reference,
+	// keyed by VNet resource ID, with the VNet resource GUID as value. Consumers must use AdditionalVNETGUID.
+	AdditionalVNETGUIDs map[string]string `json:"additionalVnetGuids,omitempty"`
+	// [EXPERIMENTAL] Enables IP forwarding on node NICs, so nodes accept traffic routed to their pod CIDR by user-defined routes.
+	NICIPForwarding bool `json:"nicIPForwarding,omitempty"`
+
 	ProvisionMode              string            `json:"provisionMode,omitempty"`
 	NodeBootstrappingServerURL string            `json:"-"`
 	UseSIG                     bool              `json:"useSIG,omitempty"` // => UseSIG is true if Karpenter is managed by AKS, false if it is a self-hosted karpenter installation
@@ -177,6 +183,12 @@ func (o *Options) AddFlags(fs *coreoptions.FlagSet) {
 	}
 	// See https://github.com/Azure/karpenter-provider-azure/issues/1042 for issue discussing improvements around this
 	fs.Var(additionalTagsFlag, "additional-tags", "Additional tags to apply to the resources in Azure. Format is key1=value1,key2=value2. These tags will be merged with the tags specified on the NodePool. In the case of a tag collision, the NodePool tag wins. These tags only apply to new nodes and do not trigger drift, which means that adding tags to this collection will not update existing nodes until drift triggers for some other reason.")
+	additionalVNETGUIDsFlag := k8sflag.NewMapStringString(&o.AdditionalVNETGUIDs)
+	if err := additionalVNETGUIDsFlag.Set(env.WithDefaultString("ADDITIONAL_VNET_GUIDS", "")); err != nil {
+		panic(fmt.Sprintf("failed to parse ADDITIONAL_VNET_GUIDS from string %q: %s", env.WithDefaultString("ADDITIONAL_VNET_GUIDS", ""), err))
+	}
+	fs.Var(additionalVNETGUIDsFlag, "additional-vnet-guids", "[EXPERIMENTAL] VNets other than the cluster VNet whose subnets AKSNodeClass.spec.vnetSubnetID may reference. Format is vnetResourceID1=vnetGUID1,vnetResourceID2=vnetGUID2. The VNets must be in the cluster subscription and peered with the cluster VNet. Nodes in these VNets are not added to the cluster load balancer backend pools, so the subnets need their own outbound connectivity.")
+	fs.BoolVar(&o.NICIPForwarding, "nic-ip-forwarding", env.WithDefaultBool("NIC_IP_FORWARDING", false), "[EXPERIMENTAL] If set to true, IP forwarding is enabled on node network interfaces.")
 	fs.BoolVar(&o.EnableAzureSDKLogging, "enable-azure-sdk-logging", env.WithDefaultBool("ENABLE_AZURE_SDK_LOGGING", true), "If set to false then Azure SDK middleware logging is disabled for debugging, and won't be logging all HTTP requests/responses to Azure APIs.")
 }
 

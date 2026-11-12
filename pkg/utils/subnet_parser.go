@@ -42,6 +42,11 @@ func (v VnetSubnetResource) IsSameVNET(cmp VnetSubnetResource) bool {
 	return true
 }
 
+// VNetID returns the resource ID of the VNet the subnet belongs to
+func (v VnetSubnetResource) VNetID() string {
+	return fmt.Sprintf("/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Network/virtualNetworks/%s", v.SubscriptionID, v.ResourceGroupName, v.VNetName)
+}
+
 // GetSubnetResourceID constructs the subnet resource id
 func GetSubnetResourceID(subscriptionID, resourceGroupName, virtualNetworkName, subnetName string) string {
 	// an example subnet resource: /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Network/virtualNetworks/{virtualNetworkName}/subnets/{subnetName}

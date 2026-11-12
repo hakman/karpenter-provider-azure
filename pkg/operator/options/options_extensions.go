@@ -17,7 +17,10 @@ limitations under the License.
 package options
 
 import (
+	"strings"
+
 	"github.com/Azure/karpenter-provider-azure/pkg/consts"
+	"github.com/Azure/karpenter-provider-azure/pkg/utils"
 )
 
 func (o *Options) IsAzureCNIOverlay() bool {
@@ -30,6 +33,17 @@ func (o *Options) IsCiliumNodeSubnet() bool {
 
 func (o *Options) IsNetworkPluginNone() bool {
 	return o.NetworkPlugin == consts.NetworkPluginNone
+}
+
+// AdditionalVNETGUID returns the resource GUID of the subnet's VNet, and true, if that VNet is listed in
+// --additional-vnet-guids. The cluster VNet is never listed there (see validateAdditionalVNETGUIDs).
+func (o *Options) AdditionalVNETGUID(subnet utils.VnetSubnetResource) (string, bool) {
+	for vnetID, guid := range o.AdditionalVNETGUIDs {
+		if strings.EqualFold(vnetID, subnet.VNetID()) {
+			return guid, true
+		}
+	}
+	return "", false
 }
 
 // SupportsWorkloadRuntime reports whether the configured provision mode can provision a non-default

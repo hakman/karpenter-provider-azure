@@ -529,7 +529,7 @@ func (p *DefaultVMProvider) newNetworkInterfaceForVM(opts *createNICOptions) arm
 			},
 			NetworkSecurityGroup:        nsgRef,
 			EnableAcceleratedNetworking: lo.ToPtr(enableAcceleratedNetworking),
-			EnableIPForwarding:          lo.ToPtr(false),
+			EnableIPForwarding:          lo.ToPtr(opts.EnableIPForwarding),
 		},
 	}
 	if opts.NetworkPlugin == consts.NetworkPluginAzure && opts.NetworkPluginMode != consts.NetworkPluginModeOverlay {
@@ -565,6 +565,7 @@ type createNICOptions struct {
 	NetworkPluginMode      string
 	MaxPods                int32
 	NetworkSecurityGroupID string
+	EnableIPForwarding     bool
 }
 
 func (p *DefaultVMProvider) createNetworkInterface(ctx context.Context, opts *createNICOptions) (string, error) {
@@ -919,6 +920,14 @@ func (p *DefaultVMProvider) beginLaunchInstance(
 		return nil, fmt.Errorf("getting backend pools: %w", err)
 	}
 	backendPools = filterBackendPools(backendPools, nodeClaim)
+	subnet, err := utils.GetVnetSubnetIDComponents(launchTemplate.SubnetID)
+	if err != nil {
+		return nil, fmt.Errorf("parsing subnet ID: %w", err)
+	}
+	if _, isAdditionalVNET := options.FromContext(ctx).AdditionalVNETGUID(subnet); isAdditionalVNET {
+		// Load balancer backend pools only accept members from the load balancer's own VNet
+		backendPools = &loadbalancer.BackendAddressPools{}
+	}
 	networkPlugin := options.FromContext(ctx).NetworkPlugin
 	networkPluginMode := options.FromContext(ctx).NetworkPluginMode
 
@@ -948,6 +957,7 @@ func (p *DefaultVMProvider) beginLaunchInstance(
 		BackendPools:           backendPools,
 		InstanceType:           instanceType,
 		NetworkSecurityGroupID: nsgID,
+		EnableIPForwarding:     options.FromContext(ctx).NICIPForwarding,
 	}
 
 	nicReference, err := p.createNetworkInterface(ctx, nicOpts)
