@@ -1,11 +1,12 @@
 // [EXPERIMENTAL] Additional VNets for Karpenter nodes outside the cluster VNet; see examples/v1/additional-vnet.yaml.
 //
 // Deploy to the resource group of the cluster VNet. For each additional VNet this creates a subnet with a
-// NAT gateway, a network security group and a route table, and peers the VNet with the cluster VNet and
-// with every other additional VNet.
+// NAT gateway and a network security group, and peers the VNet with the cluster VNet and with every other
+// additional VNet.
 //
-// Not covered: enabling WireGuard on the cluster, and the per-node pod CIDR routes on the cluster subnet
-// that host-to-pod and NodePort traffic into these VNets needs.
+// This is all the network needs when WireGuard with node encryption carries the traffic between nodes,
+// as described in the example: Azure then only sees traffic between node IPs. Enabling that on the
+// cluster is not covered here.
 
 @description('Name of the cluster VNet, in this resource group')
 param clusterVnetName string
@@ -17,12 +18,6 @@ param vnets {
   addressPrefix: string
   subnetPrefix: string
 }[]
-
-@description('Pod CIDR of the cluster')
-param podCidr string = '10.244.0.0/16'
-
-@description('IP of a cluster VNet node (or internal load balancer in front of several) that forwards pod CIDR traffic from the additional VNets. Leave empty to rely on WireGuard for pod-to-pod traffic only.')
-param podCidrGatewayIP string = ''
 
 @description('Principal ID of the Karpenter identity; gets Network Contributor on the additional VNets. Leave empty to skip.')
 param karpenterPrincipalId string = ''
@@ -62,78 +57,12 @@ resource natGateways 'Microsoft.Network/natGateways@2024-05-01' = [
   }
 ]
 
-// The default rules cover node-to-node traffic, including WireGuard. Traffic routed to or from pod IPs
-// needs explicit rules, because the pod CIDR is not part of the VirtualNetwork service tag.
+// The default rules allow traffic between the node IPs of peered VNets, which is all WireGuard needs.
 resource securityGroups 'Microsoft.Network/networkSecurityGroups@2024-05-01' = [
   for vnet in vnets: {
     name: '${vnet.name}-nsg'
     location: vnet.location
     tags: tags
-    properties: {
-      securityRules: [
-        {
-          name: 'AllowFromPodCidrInbound'
-          properties: {
-            priority: 200
-            direction: 'Inbound'
-            access: 'Allow'
-            protocol: '*'
-            sourceAddressPrefix: podCidr
-            sourcePortRange: '*'
-            destinationAddressPrefix: '*'
-            destinationPortRange: '*'
-          }
-        }
-        {
-          name: 'AllowToPodCidrInbound'
-          properties: {
-            priority: 210
-            direction: 'Inbound'
-            access: 'Allow'
-            protocol: '*'
-            sourceAddressPrefix: 'VirtualNetwork'
-            sourcePortRange: '*'
-            destinationAddressPrefix: podCidr
-            destinationPortRange: '*'
-          }
-        }
-        {
-          name: 'AllowToPodCidrOutbound'
-          properties: {
-            priority: 200
-            direction: 'Outbound'
-            access: 'Allow'
-            protocol: '*'
-            sourceAddressPrefix: '*'
-            sourcePortRange: '*'
-            destinationAddressPrefix: podCidr
-            destinationPortRange: '*'
-          }
-        }
-      ]
-    }
-  }
-]
-
-resource routeTables 'Microsoft.Network/routeTables@2024-05-01' = [
-  for vnet in vnets: {
-    name: '${vnet.name}-routes'
-    location: vnet.location
-    tags: tags
-    properties: {
-      routes: empty(podCidrGatewayIP)
-        ? []
-        : [
-            {
-              name: 'pod-cidr-via-gateway'
-              properties: {
-                addressPrefix: podCidr
-                nextHopType: 'VirtualAppliance'
-                nextHopIpAddress: podCidrGatewayIP
-              }
-            }
-          ]
-    }
   }
 ]
 
@@ -151,7 +80,6 @@ resource additionalVnets 'Microsoft.Network/virtualNetworks@2024-05-01' = [
             addressPrefix: vnet.subnetPrefix
             natGateway: { id: natGateways[i].id }
             networkSecurityGroup: { id: securityGroups[i].id }
-            routeTable: { id: routeTables[i].id }
           }
         }
       ]
@@ -168,7 +96,6 @@ resource peeringsFromCluster 'Microsoft.Network/virtualNetworks/virtualNetworkPe
     properties: {
       remoteVirtualNetwork: { id: additionalVnets[i].id }
       allowVirtualNetworkAccess: true
-      allowForwardedTraffic: true
     }
   }
 ]
@@ -181,7 +108,6 @@ resource peeringsToCluster 'Microsoft.Network/virtualNetworks/virtualNetworkPeer
     properties: {
       remoteVirtualNetwork: { id: clusterVnet.id }
       allowVirtualNetworkAccess: true
-      allowForwardedTraffic: true
     }
     dependsOn: [peeringsFromCluster]
   }
@@ -194,7 +120,6 @@ resource peeringsMesh 'Microsoft.Network/virtualNetworks/virtualNetworkPeerings@
     properties: {
       remoteVirtualNetwork: { id: resourceId('Microsoft.Network/virtualNetworks', pair.to) }
       allowVirtualNetworkAccess: true
-      allowForwardedTraffic: true
     }
     dependsOn: [peeringsToCluster]
   }

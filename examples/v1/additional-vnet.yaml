@@ -11,12 +11,14 @@
 # - The VNet is peered with the cluster VNet, and its subnet has its own outbound connectivity
 #   (for example a NAT gateway) and network security group. hack/azure/additional-vnets.bicep
 #   creates such VNets and outputs the value for --additional-vnets.
-# - Pod traffic between the VNets needs one of:
-#   - WireGuard transit encryption (az aks update --enable-acns --acns-transit-encryption-type WireGuard),
-#     which covers pod-to-pod traffic; or
-#   - user-defined routes for each node's pod CIDR with the node IP as next hop, on the subnets of the
-#     other VNets, with Karpenter running with --nic-ip-forwarding. Routes are also what host-to-pod and
-#     NodePort traffic between the VNets needs.
+# - Traffic between nodes in different VNets is carried by WireGuard with node encryption, so that
+#   Azure only sees traffic between node IPs and no routes for pod CIDRs are needed:
+#     az aks update --resource-group <resource-group> --name <cluster> --enable-acns \
+#       --acns-transit-encryption-type WireGuard --output none
+#     kubectl -n kube-system patch configmap cilium-config --type merge -p '{"data":{"encrypt-node":"true"}}'
+#     kubectl -n kube-system rollout restart daemonset cilium
+#   AKS does not support changes to cilium-config and may reset it, for example on upgrade. Without
+#   encrypt-node only pod-to-pod traffic crosses the VNets: host-to-pod and NodePort traffic does not.
 # - Replace the vnetSubnetID below.
 ---
 apiVersion: karpenter.sh/v1
