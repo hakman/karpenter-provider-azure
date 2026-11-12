@@ -335,8 +335,7 @@ var _ = Describe("InstanceType Provider", func() {
 			It("should create the network interface and VM in the location of an additional VNet", func() {
 				additionalVNETID := "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/remote-rg/providers/Microsoft.Network/virtualNetworks/remote-vnet"
 				ctx = options.ToContext(ctx, test.Options(test.OptionsFields{
-					AdditionalVNETGUIDs:     map[string]string{additionalVNETID: "b629f70b-dbd1-41c3-9c94-195588af7a6d"},
-					AdditionalVNETLocations: map[string]string{additionalVNETID: "otherregion"},
+					AdditionalVNETs: map[string]string{additionalVNETID: "otherregion"},
 				}))
 				nodeClass.Spec.VNETSubnetID = lo.ToPtr(additionalVNETID + "/subnets/nodes")
 
@@ -2483,12 +2482,12 @@ var _ = Describe("InstanceType Provider", func() {
 				Expect(lo.FromPtr(backendPools[2].ID)).To(Equal("/subscriptions/subscriptionID/resourceGroups/test-resourceGroup/providers/Microsoft.Network/loadBalancers/kubernetes-internal/backendAddressPools/kubernetes"))
 			})
 
-			It("should not include loadbalancer backend pools for a subnet in an additional VNet", func() {
+			It("should not include loadbalancer backend pools or the managed NSG for a subnet in an additional VNet", func() {
 				additionalVNETID := "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/remote-rg/providers/Microsoft.Network/virtualNetworks/remote-vnet"
 				standardLB := test.MakeStandardLoadBalancer(resourceGroup, loadbalancer.SLBName, true)
 				azureEnv.LoadBalancersAPI.LoadBalancers.Store(lo.FromPtr(standardLB.ID), standardLB)
 				ctx = options.ToContext(ctx, test.Options(test.OptionsFields{
-					AdditionalVNETGUIDs: map[string]string{additionalVNETID: "b629f70b-dbd1-41c3-9c94-195588af7a6d"},
+					AdditionalVNETs: map[string]string{additionalVNETID: fake.Region},
 				}))
 				nodeClass.Spec.VNETSubnetID = lo.ToPtr(additionalVNETID + "/subnets/nodes")
 
@@ -2500,7 +2499,8 @@ var _ = Describe("InstanceType Provider", func() {
 				iface := azureEnv.NetworkInterfacesAPI.NetworkInterfacesCreateOrUpdateBehavior.CalledWithInput.Pop().Interface
 				Expect(lo.FromPtr(iface.Properties.IPConfigurations[0].Properties.Subnet.ID)).To(Equal(additionalVNETID + "/subnets/nodes"))
 				Expect(iface.Properties.IPConfigurations[0].Properties.LoadBalancerBackendAddressPools).To(BeEmpty())
-				Expect(ExpectDecodedCustomData(azureEnv)).To(ContainSubstring("kubernetes.azure.com/nodenetwork-vnetguid=b629f70b-dbd1-41c3-9c94-195588af7a6d"))
+				Expect(iface.Properties.NetworkSecurityGroup).To(BeNil())
+				Expect(lo.FromPtr(iface.Location)).To(Equal(fake.Region))
 			})
 
 			outboundBackendPoolIDs := []string{

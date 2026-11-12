@@ -211,9 +211,9 @@ var _ = Describe("SubnetStatus", func() {
 			Expect(cond.Message).To(ContainSubstring("vnetSubnetID does not match the cluster subscription, resource group, or virtual network"))
 		})
 
-		It("should mark nodeclass as ready when subnet is in a VNet listed in additional-vnet-guids", func() {
+		It("should mark nodeclass as ready when subnet is in a VNet listed in additional-vnets", func() {
 			additionalVNETCtx := options.ToContext(ctx, test.Options(test.OptionsFields{
-				AdditionalVNETGUIDs: map[string]string{"/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/remote-rg/providers/Microsoft.Network/virtualNetworks/remote-vnet": "b629f70b-dbd1-41c3-9c94-195588af7a6d"},
+				AdditionalVNETs: map[string]string{"/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/remote-rg/providers/Microsoft.Network/virtualNetworks/remote-vnet": "eastus"},
 			}))
 			nodeClass.Spec.VNETSubnetID = lo.ToPtr("/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/remote-rg/providers/Microsoft.Network/virtualNetworks/remote-vnet/subnets/nodes")
 

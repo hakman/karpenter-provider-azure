@@ -100,7 +100,7 @@ func (r *SubnetReconciler) validateVNETSubnetID(ctx context.Context, nodeClass *
 			return reconcile.Result{}, nil
 		}
 
-		_, isAdditionalVNET := options.FromContext(ctx).AdditionalVNETGUID(nodeClassSubnetComponents)
+		_, isAdditionalVNET := options.FromContext(ctx).AdditionalVNETLocation(nodeClassSubnetComponents)
 		if !clusterSubnetIDParts.IsSameVNET(nodeClassSubnetComponents) && !isAdditionalVNET {
 			logger.Error(nil, "subnet does not match cluster subscription, resource group, or virtual network", "subnetID", subnetID)
 			nodeClass.StatusConditions().SetFalse(

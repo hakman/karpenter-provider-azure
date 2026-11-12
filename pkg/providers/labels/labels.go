@@ -144,9 +144,6 @@ func Get(
 		}
 		labels[AKSLabelSubnetName] = vnetSubnetComponents.SubnetName
 		labels[AKSLabelVNetGUID] = options.FromContext(ctx).VnetGUID
-		if guid, ok := opts.AdditionalVNETGUID(vnetSubnetComponents); ok {
-			labels[AKSLabelVNetGUID] = guid
-		}
 		labels[AKSLabelAzureCNIOverlay] = strconv.FormatBool(true)
 		labels[AKSLabelPodNetworkType] = consts.NetworkPluginModeOverlay
 

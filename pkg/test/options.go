@@ -44,8 +44,7 @@ type OptionsFields struct {
 	ProvisionMode                  *string
 	NodeBootstrappingServerURL     *string
 	VnetGUID                       *string
-	AdditionalVNETGUIDs            map[string]string
-	AdditionalVNETLocations        map[string]string
+	AdditionalVNETs                map[string]string
 	NICIPForwarding                *bool
 	KubeletIdentityClientID        *string
 	AdditionalTags                 map[string]string
@@ -85,8 +84,7 @@ func Options(overrides ...OptionsFields) *azoptions.Options {
 		NetworkPluginMode:              lo.FromPtrOr(options.NetworkPluginMode, "overlay"),
 		NetworkPolicy:                  lo.FromPtrOr(options.NetworkPolicy, "cilium"),
 		VnetGUID:                       lo.FromPtrOr(options.VnetGUID, "a519e60a-cac0-40b2-b883-084477fe6f5c"),
-		AdditionalVNETGUIDs:            options.AdditionalVNETGUIDs,
-		AdditionalVNETLocations:        options.AdditionalVNETLocations,
+		AdditionalVNETs:                options.AdditionalVNETs,
 		NICIPForwarding:                lo.FromPtrOr(options.NICIPForwarding, false),
 		NetworkDataplane:               lo.FromPtrOr(options.NetworkDataplane, "cilium"),
 		VMMemoryOverheadPercent:        lo.FromPtrOr(options.VMMemoryOverheadPercent, 0.075),

@@ -35,17 +35,6 @@ func (o *Options) IsNetworkPluginNone() bool {
 	return o.NetworkPlugin == consts.NetworkPluginNone
 }
 
-// AdditionalVNETGUID returns the resource GUID of the subnet's VNet, and true, if that VNet is listed in
-// --additional-vnet-guids. The cluster VNet is never listed there (see validateAdditionalVNETGUIDs).
-func (o *Options) AdditionalVNETGUID(subnet utils.VnetSubnetResource) (string, bool) {
-	for vnetID, guid := range o.AdditionalVNETGUIDs {
-		if strings.EqualFold(vnetID, subnet.VNetID()) {
-			return guid, true
-		}
-	}
-	return "", false
-}
-
 // SupportsWorkloadRuntime reports whether the configured provision mode can provision a non-default
 // workloadRuntime (AKS Pod Sandboxing). The AKS machine API carries it on the machine object and the
 // bootstrapping client carries it in the node bootstrapping request. The aksscriptless path builds
@@ -61,10 +50,10 @@ func (o *Options) SupportsNodePublicIP() bool {
 	return o.IsAKSMachineAPIMode()
 }
 
-// AdditionalVNETLocation returns the location of the subnet's VNet, and true, if one is set in
-// --additional-vnet-locations.
+// AdditionalVNETLocation returns the location of the subnet's VNet, and true, if that VNet is listed in
+// --additional-vnets. The cluster VNet is never listed there (see validateAdditionalVNETs).
 func (o *Options) AdditionalVNETLocation(subnet utils.VnetSubnetResource) (string, bool) {
-	for vnetID, location := range o.AdditionalVNETLocations {
+	for vnetID, location := range o.AdditionalVNETs {
 		if strings.EqualFold(vnetID, subnet.VNetID()) {
 			return location, true
 		}

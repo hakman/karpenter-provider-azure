@@ -1,0 +1,167 @@
+# [EXPERIMENTAL, UNSUPPORTED BY AKS] This example provisions nodes in a VNet other than the cluster VNet,
+# on a cluster that uses Azure CNI Overlay with the Cilium dataplane and a VM-based provision mode.
+#
+# AKS does not program the overlay pod network for nodes outside the cluster VNet, so the azure-cns
+# DaemonSet never writes the CNI configuration there and the nodes stay NotReady. AKS does still reserve
+# a pod CIDR for each of them in its NodeNetworkConfig. The DaemonSet below writes the same Cilium CNI
+# configuration AKS uses, but with the host-local IPAM plugin allocating from that reserved pod CIDR.
+#
+# Prerequisites:
+# - Karpenter runs with --additional-vnets (ADDITIONAL_VNETS) listing the VNet and its location.
+# - The VNet is peered with the cluster VNet, and its subnet has its own outbound connectivity
+#   (for example a NAT gateway) and network security group.
+# - Pod traffic between the VNets needs one of:
+#   - WireGuard transit encryption (az aks update --enable-acns --acns-transit-encryption-type WireGuard),
+#     which covers pod-to-pod traffic; or
+#   - user-defined routes for each node's pod CIDR with the node IP as next hop, on the subnets of the
+#     other VNets, with Karpenter running with --nic-ip-forwarding. Routes are also what host-to-pod and
+#     NodePort traffic between the VNets needs.
+# - Replace the vnetSubnetID below.
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: additional-vnet
+  annotations:
+    kubernetes.io/description: "NodePool for nodes in a VNet other than the cluster VNet"
+spec:
+  template:
+    metadata:
+      labels:
+        # required for Karpenter to predict overhead from cilium DaemonSet
+        kubernetes.azure.com/ebpf-dataplane: cilium
+        # selects the nodes that get the host-local CNI configuration below
+        additional-vnet: "true"
+        # the cluster load balancers only accept backends from the cluster VNet
+        node.kubernetes.io/exclude-from-external-load-balancers: "true"
+    spec:
+      nodeClassRef:
+        group: karpenter.azure.com
+        kind: AKSNodeClass
+        name: additional-vnet
+      startupTaints:
+      # https://karpenter.sh/docs/concepts/nodepools/#cilium-startup-taint
+      - key: node.cilium.io/agent-not-ready
+        effect: NoExecute
+        value: "true"
+      expireAfter: Never
+      requirements:
+      - key: kubernetes.io/arch
+        operator: In
+        values: ["amd64"]
+      - key: kubernetes.io/os
+        operator: In
+        values: ["linux"]
+      - key: karpenter.sh/capacity-type
+        operator: In
+        values: ["on-demand"]
+      - key: karpenter.azure.com/sku-family
+        operator: In
+        values: [D]
+---
+apiVersion: karpenter.azure.com/v1beta1
+kind: AKSNodeClass
+metadata:
+  name: additional-vnet
+  annotations:
+    kubernetes.io/description: "AKSNodeClass for nodes in a VNet other than the cluster VNet"
+spec:
+  imageFamily: Ubuntu
+  vnetSubnetID: /subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<subnet>
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: additional-vnet-cni
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: additional-vnet-cni
+  namespace: kube-system
+rules:
+- apiGroups: ["acn.azure.com"]
+  resources: ["nodenetworkconfigs"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: additional-vnet-cni
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: additional-vnet-cni
+subjects:
+- kind: ServiceAccount
+  name: additional-vnet-cni
+  namespace: kube-system
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: additional-vnet-cni
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      app: additional-vnet-cni
+  template:
+    metadata:
+      labels:
+        app: additional-vnet-cni
+    spec:
+      serviceAccountName: additional-vnet-cni
+      priorityClassName: system-node-critical
+      # the pod network is not available until this pod has done its work
+      hostNetwork: true
+      nodeSelector:
+        additional-vnet: "true"
+      tolerations:
+      - operator: Exists
+      containers:
+      - name: cni-config
+        # any image with sh, curl, sed and grep works
+        image: registry.k8s.io/e2e-test-images/agnhost:2.53
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -u
+          conf=/host/etc/cni/net.d/05-cilium.conflist
+          sa=/var/run/secrets/kubernetes.io/serviceaccount
+          url="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}/apis/acn.azure.com/v1alpha/namespaces/kube-system/nodenetworkconfigs/${NODE_NAME}"
+          while true; do
+            # leave the file alone if azure-cns wrote it: that node has a working overlay network
+            if ! grep -q '"azure-ipam"' "$conf" 2>/dev/null; then
+              cidr=$(curl -sS --max-time 10 --cacert "$sa/ca.crt" -H "Authorization: Bearer $(cat "$sa/token")" "$url" |
+                sed -n 's/.*"primaryIP": *"\([^"]*\)".*/\1/p' | head -n 1)
+              if [ -z "$cidr" ]; then
+                echo "no pod CIDR reserved for ${NODE_NAME} yet"
+              elif ! grep -q "\"$cidr\"" "$conf" 2>/dev/null; then
+                printf '{\n\t"cniVersion": "0.3.1",\n\t"name": "cilium",\n\t"plugins": [\n\t\t{\n\t\t\t"type": "cilium-cni",\n\t\t\t"ipam": {\n\t\t\t\t"type": "host-local",\n\t\t\t\t"ranges": [[{"subnet": "%s"}]]\n\t\t\t},\n\t\t\t"log-file": "/var/log/cilium-cni.log"\n\t\t}\n\t]\n}\n' "$cidr" > "$conf.tmp"
+                mv "$conf.tmp" "$conf"
+                echo "wrote $conf with host-local range $cidr"
+              fi
+            fi
+            sleep 30
+          done
+        resources:
+          requests:
+            cpu: 5m
+            memory: 16Mi
+        volumeMounts:
+        - name: cni-conf
+          mountPath: /host/etc/cni/net.d
+      volumes:
+      - name: cni-conf
+        hostPath:
+          path: /etc/cni/net.d
+          type: Directory

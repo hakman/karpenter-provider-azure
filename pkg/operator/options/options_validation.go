@@ -25,7 +25,6 @@ import (
 
 	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
-	"github.com/samber/lo"
 	"go.uber.org/multierr"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/arm"
@@ -43,8 +42,7 @@ func (o *Options) Validate() error {
 		o.validateNetworkingOptions(),
 		o.validateVMMemoryOverheadPercent(),
 		o.validateVnetSubnetID(),
-		o.validateAdditionalVNETGUIDs(),
-		o.validateAdditionalVNETLocations(),
+		o.validateAdditionalVNETs(),
 		o.validateProvisionMode(),
 		o.validateUseSIG(),
 		o.validateAdminUsername(),
@@ -104,40 +102,28 @@ func (o *Options) validateVnetSubnetID() error {
 	return nil
 }
 
-func (o *Options) validateAdditionalVNETGUIDs() error {
-	if len(o.AdditionalVNETGUIDs) == 0 {
+func (o *Options) validateAdditionalVNETs() error {
+	if len(o.AdditionalVNETs) == 0 {
 		return nil
 	}
 	clusterSubnet, err := utils.GetVnetSubnetIDComponents(o.SubnetID)
 	if err != nil {
 		return nil // reported by validateVnetSubnetID
 	}
-	for vnetID, guid := range o.AdditionalVNETGUIDs {
+	for vnetID, location := range o.AdditionalVNETs {
 		// Reuse the subnet parser by appending a placeholder subnet name
 		vnet, err := utils.GetVnetSubnetIDComponents(vnetID + "/subnets/any")
 		if err != nil {
-			return fmt.Errorf("additional-vnet-guids key %q is not a valid vnet resource ID", vnetID)
+			return fmt.Errorf("additional-vnets key %q is not a valid vnet resource ID", vnetID)
 		}
 		if !strings.EqualFold(vnet.SubscriptionID, clusterSubnet.SubscriptionID) {
-			return fmt.Errorf("additional-vnet-guids key %q must be in the cluster subscription %s", vnetID, clusterSubnet.SubscriptionID)
+			return fmt.Errorf("additional-vnets key %q must be in the cluster subscription %s", vnetID, clusterSubnet.SubscriptionID)
 		}
 		if strings.EqualFold(vnet.VNetID(), clusterSubnet.VNetID()) {
-			return fmt.Errorf("additional-vnet-guids key %q must not be the cluster vnet", vnetID)
-		}
-		if uuid.Validate(guid) != nil {
-			return fmt.Errorf("additional-vnet-guids value %q for %q is not a valid vnet guid", guid, vnetID)
-		}
-	}
-	return nil
-}
-
-func (o *Options) validateAdditionalVNETLocations() error {
-	for vnetID, location := range o.AdditionalVNETLocations {
-		if !lo.ContainsBy(lo.Keys(o.AdditionalVNETGUIDs), func(k string) bool { return strings.EqualFold(k, vnetID) }) {
-			return fmt.Errorf("additional-vnet-locations key %q is not listed in additional-vnet-guids", vnetID)
+			return fmt.Errorf("additional-vnets key %q must not be the cluster vnet", vnetID)
 		}
 		if location == "" {
-			return fmt.Errorf("additional-vnet-locations value for %q must not be empty", vnetID)
+			return fmt.Errorf("additional-vnets value for %q must be the vnet location", vnetID)
 		}
 	}
 	return nil

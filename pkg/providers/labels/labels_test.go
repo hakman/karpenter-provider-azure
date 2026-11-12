@@ -467,9 +467,8 @@ func TestDoNotSyncTaintsLabel(t *testing.T) {
 
 func TestVNetGUIDLabel(t *testing.T) {
 	const (
-		clusterVNETGUID    = "a519e60a-cac0-40b2-b883-084477fe6f5c"
-		additionalVNETID   = "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/remote-rg/providers/Microsoft.Network/virtualNetworks/remote-vnet"
-		additionalVNETGUID = "b629f70b-dbd1-41c3-9c94-195588af7a6d"
+		clusterVNETGUID  = "a519e60a-cac0-40b2-b883-084477fe6f5c"
+		additionalVNETID = "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/remote-rg/providers/Microsoft.Network/virtualNetworks/remote-vnet"
 	)
 	testCases := []struct {
 		name         string
@@ -481,9 +480,10 @@ func TestVNetGUIDLabel(t *testing.T) {
 			expectedGUID: clusterVNETGUID,
 		},
 		{
-			name:         "subnet in an additional VNet gets that VNet's GUID",
+			// AKS only assigns an overlay pod CIDR to nodes labeled with the cluster VNet GUID
+			name:         "subnet in an additional VNet also gets the cluster VNet GUID",
 			vnetSubnetID: lo.ToPtr(additionalVNETID + "/subnets/nodes"),
-			expectedGUID: additionalVNETGUID,
+			expectedGUID: clusterVNETGUID,
 		},
 	}
 
@@ -497,7 +497,7 @@ func TestVNetGUIDLabel(t *testing.T) {
 				NetworkPluginMode:       "overlay",
 				SubnetID:                "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/test/providers/Microsoft.Network/virtualNetworks/test/subnets/test",
 				VnetGUID:                clusterVNETGUID,
-				AdditionalVNETGUIDs:     map[string]string{additionalVNETID: additionalVNETGUID},
+				AdditionalVNETs:         map[string]string{additionalVNETID: "eastus"},
 			})
 
 			nodeClass := &v1beta1.AKSNodeClass{

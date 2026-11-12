@@ -926,16 +926,14 @@ func (p *DefaultVMProvider) beginLaunchInstance(
 	if err != nil {
 		return nil, fmt.Errorf("parsing subnet ID: %w", err)
 	}
-	if _, isAdditionalVNET := options.FromContext(ctx).AdditionalVNETGUID(subnet); isAdditionalVNET {
+	location := p.location
+	additionalVNETLocation, isAdditionalVNET := options.FromContext(ctx).AdditionalVNETLocation(subnet)
+	if isAdditionalVNET {
 		// Load balancer backend pools only accept members from the load balancer's own VNet
 		backendPools = &loadbalancer.BackendAddressPools{}
-	}
-	location := p.location
-	if additionalVNETLocation, ok := options.FromContext(ctx).AdditionalVNETLocation(subnet); ok {
 		location = additionalVNETLocation
 	}
-	inClusterLocation := strings.EqualFold(location, p.location)
-	if !inClusterLocation {
+	if !strings.EqualFold(location, p.location) {
 		// The selected zone belongs to the cluster location, so create a regional VM
 		zone = zones.Regional
 	}
@@ -947,8 +945,9 @@ func (p *DefaultVMProvider) beginLaunchInstance(
 		return nil, fmt.Errorf("checking if vnet is managed: %w", err)
 	}
 	var nsgID string
-	// The managed network security group can only be attached to NICs in the cluster location
-	if !isAKSManagedVNET && inClusterLocation {
+	// The managed network security group has no rules for the pod CIDRs of nodes outside the cluster VNet,
+	// and cannot be attached to NICs outside the cluster location, so additional VNets bring their own.
+	if !isAKSManagedVNET && !isAdditionalVNET {
 		nsg, err := p.networkSecurityGroupProvider.ManagedNetworkSecurityGroup(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("getting managed network security group: %w", err)
