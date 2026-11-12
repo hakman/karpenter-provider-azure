@@ -9,7 +9,8 @@
 # Prerequisites:
 # - Karpenter runs with --additional-vnets (ADDITIONAL_VNETS) listing the VNet and its location.
 # - The VNet is peered with the cluster VNet, and its subnet has its own outbound connectivity
-#   (for example a NAT gateway) and network security group.
+#   (for example a NAT gateway) and network security group. hack/azure/additional-vnets.bicep
+#   creates such VNets and outputs the value for --additional-vnets.
 # - Pod traffic between the VNets needs one of:
 #   - WireGuard transit encryption (az aks update --enable-acns --acns-transit-encryption-type WireGuard),
 #     which covers pod-to-pod traffic; or
