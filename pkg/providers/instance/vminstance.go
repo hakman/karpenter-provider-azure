@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -460,8 +461,8 @@ func (p *DefaultVMProvider) DeleteNic(ctx context.Context, nicName string) error
 }
 
 // createAKSIdentifyingExtension attaches a VM extension to identify that this VM participates in an AKS cluster
-func (p *DefaultVMProvider) createAKSIdentifyingExtension(ctx context.Context, vmName string, tags map[string]*string) (err error) {
-	vmExt := p.getAKSIdentifyingExtension(tags)
+func (p *DefaultVMProvider) createAKSIdentifyingExtension(ctx context.Context, vmName string, location string, tags map[string]*string) (err error) {
+	vmExt := p.getAKSIdentifyingExtension(location, tags)
 	vmExtName := *vmExt.Name
 	log.FromContext(ctx).V(1).Info("creating virtual machine AKS identifying extension", "vmName", vmName)
 	v, err := createVirtualMachineExtension(ctx, p.azClient.VirtualMachineExtensionsClient(), p.resourceGroup, vmName, vmExtName, *vmExt)
@@ -475,8 +476,8 @@ func (p *DefaultVMProvider) createAKSIdentifyingExtension(ctx context.Context, v
 	return nil
 }
 
-func (p *DefaultVMProvider) createCSExtension(ctx context.Context, vmName string, cse string, isWindows bool, tags map[string]*string) error {
-	vmExt := p.getCSExtension(cse, isWindows, tags)
+func (p *DefaultVMProvider) createCSExtension(ctx context.Context, vmName string, location string, cse string, isWindows bool, tags map[string]*string) error {
+	vmExt := p.getCSExtension(location, cse, isWindows, tags)
 	vmExtName := *vmExt.Name
 	log.FromContext(ctx).V(1).Info("creating virtual machine CSE", "vmName", vmName)
 	v, err := createVirtualMachineExtension(ctx, p.azClient.VirtualMachineExtensionsClient(), p.resourceGroup, vmName, vmExtName, *vmExt)
@@ -514,7 +515,7 @@ func (p *DefaultVMProvider) newNetworkInterfaceForVM(opts *createNICOptions) arm
 	}
 
 	nic := armnetwork.Interface{
-		Location: lo.ToPtr(p.location),
+		Location: lo.ToPtr(opts.Location),
 		Properties: &armnetwork.InterfacePropertiesFormat{
 			IPConfigurations: []*armnetwork.InterfaceIPConfiguration{
 				{
@@ -566,6 +567,7 @@ type createNICOptions struct {
 	MaxPods                int32
 	NetworkSecurityGroupID string
 	EnableIPForwarding     bool
+	Location               string
 }
 
 func (p *DefaultVMProvider) createNetworkInterface(ctx context.Context, opts *createNICOptions) (string, error) {
@@ -928,6 +930,15 @@ func (p *DefaultVMProvider) beginLaunchInstance(
 		// Load balancer backend pools only accept members from the load balancer's own VNet
 		backendPools = &loadbalancer.BackendAddressPools{}
 	}
+	location := p.location
+	if additionalVNETLocation, ok := options.FromContext(ctx).AdditionalVNETLocation(subnet); ok {
+		location = additionalVNETLocation
+	}
+	inClusterLocation := strings.EqualFold(location, p.location)
+	if !inClusterLocation {
+		// The selected zone belongs to the cluster location, so create a regional VM
+		zone = zones.Regional
+	}
 	networkPlugin := options.FromContext(ctx).NetworkPlugin
 	networkPluginMode := options.FromContext(ctx).NetworkPluginMode
 
@@ -936,7 +947,8 @@ func (p *DefaultVMProvider) beginLaunchInstance(
 		return nil, fmt.Errorf("checking if vnet is managed: %w", err)
 	}
 	var nsgID string
-	if !isAKSManagedVNET {
+	// The managed network security group can only be attached to NICs in the cluster location
+	if !isAKSManagedVNET && inClusterLocation {
 		nsg, err := p.networkSecurityGroupProvider.ManagedNetworkSecurityGroup(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("getting managed network security group: %w", err)
@@ -958,6 +970,7 @@ func (p *DefaultVMProvider) beginLaunchInstance(
 		InstanceType:           instanceType,
 		NetworkSecurityGroupID: nsgID,
 		EnableIPForwarding:     options.FromContext(ctx).NICIPForwarding,
+		Location:               location,
 	}
 
 	nicReference, err := p.createNetworkInterface(ctx, nicOpts)
@@ -982,7 +995,7 @@ func (p *DefaultVMProvider) beginLaunchInstance(
 		NicReference:        nicReference,
 		Zone:                zone,
 		CapacityType:        capacityType,
-		Location:            p.location,
+		Location:            location,
 		SSHPublicKey:        options.FromContext(ctx).SSHPublicKey,
 		LinuxAdminUsername:  options.FromContext(ctx).LinuxAdminUsername,
 		NodeIdentities:      options.FromContext(ctx).NodeIdentities,
@@ -1056,14 +1069,14 @@ func (p *DefaultVMProvider) beginLaunchInstance(
 			}
 
 			if p.provisionMode == consts.ProvisionModeBootstrappingClient {
-				err = p.createCSExtension(ctx, resourceName, launchTemplate.CustomScriptsCSE, launchTemplate.IsWindows, launchTemplate.Tags)
+				err = p.createCSExtension(ctx, resourceName, location, launchTemplate.CustomScriptsCSE, launchTemplate.IsWindows, launchTemplate.Tags)
 				if err != nil {
 					// An error here is handled by CloudProvider create and calls vmInstanceProvider.Delete (which cleans up the azure resources)
 					return err
 				}
 			}
 			if isAKSIdentifyingExtensionEnabled(p.env) {
-				err = p.createAKSIdentifyingExtension(ctx, resourceName, launchTemplate.Tags)
+				err = p.createAKSIdentifyingExtension(ctx, resourceName, location, launchTemplate.Tags)
 				if err != nil {
 					return err
 				}
@@ -1192,7 +1205,7 @@ func (p *DefaultVMProvider) deleteVirtualMachine(ctx context.Context, vmName str
 	return nil
 }
 
-func (p *DefaultVMProvider) getAKSIdentifyingExtension(tags map[string]*string) *armcompute.VirtualMachineExtension {
+func (p *DefaultVMProvider) getAKSIdentifyingExtension(location string, tags map[string]*string) *armcompute.VirtualMachineExtension {
 	const (
 		vmExtensionType                  = "Microsoft.Compute/virtualMachines/extensions"
 		aksIdentifyingExtensionPublisher = "Microsoft.AKS"
@@ -1200,7 +1213,7 @@ func (p *DefaultVMProvider) getAKSIdentifyingExtension(tags map[string]*string) 
 	)
 
 	vmExtension := &armcompute.VirtualMachineExtension{
-		Location: lo.ToPtr(p.location),
+		Location: lo.ToPtr(location),
 		Name:     lo.ToPtr(aksIdentifyingExtensionName),
 		Properties: &armcompute.VirtualMachineExtensionProperties{
 			Publisher:               lo.ToPtr(aksIdentifyingExtensionPublisher),
@@ -1216,7 +1229,7 @@ func (p *DefaultVMProvider) getAKSIdentifyingExtension(tags map[string]*string) 
 	return vmExtension
 }
 
-func (p *DefaultVMProvider) getCSExtension(cse string, isWindows bool, tags map[string]*string) *armcompute.VirtualMachineExtension {
+func (p *DefaultVMProvider) getCSExtension(location string, cse string, isWindows bool, tags map[string]*string) *armcompute.VirtualMachineExtension {
 	const (
 		vmExtensionType     = "Microsoft.Compute/virtualMachines/extensions"
 		cseTypeWindows      = "CustomScriptExtension"
@@ -1228,7 +1241,7 @@ func (p *DefaultVMProvider) getCSExtension(cse string, isWindows bool, tags map[
 	)
 
 	return &armcompute.VirtualMachineExtension{
-		Location: lo.ToPtr(p.location),
+		Location: lo.ToPtr(location),
 		Name:     lo.ToPtr(lo.Ternary(isWindows, cseNameWindows, cseNameLinux)),
 		Type:     lo.ToPtr(vmExtensionType),
 		Properties: &armcompute.VirtualMachineExtensionProperties{

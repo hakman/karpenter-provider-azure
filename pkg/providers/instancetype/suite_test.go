@@ -332,6 +332,27 @@ var _ = Describe("InstanceType Provider", func() {
 				Expect(nic).NotTo(BeNil())
 				Expect(lo.FromPtr(nic.Interface.Properties.IPConfigurations[0].Properties.Subnet.ID)).To(Equal("/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/sillygeese/providers/Microsoft.Network/virtualNetworks/karpenter/subnets/nodeclassSubnet"))
 			})
+			It("should create the network interface and VM in the location of an additional VNet", func() {
+				additionalVNETID := "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/remote-rg/providers/Microsoft.Network/virtualNetworks/remote-vnet"
+				ctx = options.ToContext(ctx, test.Options(test.OptionsFields{
+					AdditionalVNETGUIDs:     map[string]string{additionalVNETID: "b629f70b-dbd1-41c3-9c94-195588af7a6d"},
+					AdditionalVNETLocations: map[string]string{additionalVNETID: "otherregion"},
+				}))
+				nodeClass.Spec.VNETSubnetID = lo.ToPtr(additionalVNETID + "/subnets/nodes")
+
+				ExpectApplied(ctx, env.Client, nodePool, nodeClass)
+				pod := coretest.UnschedulablePod()
+				ExpectProvisionedAndWaitForPromises(ctx, env.Client, cluster, cloudProvider, coreProvisioner, azureEnv, pod)
+				ExpectScheduled(ctx, env.Client, pod)
+
+				nic := azureEnv.NetworkInterfacesAPI.NetworkInterfacesCreateOrUpdateBehavior.CalledWithInput.Pop().Interface
+				Expect(lo.FromPtr(nic.Location)).To(Equal("otherregion"))
+				Expect(nic.Properties.NetworkSecurityGroup).To(BeNil())
+
+				vm := azureEnv.VirtualMachinesAPI.VirtualMachineCreateOrUpdateBehavior.CalledWithInput.Pop().VM
+				Expect(lo.FromPtr(vm.Location)).To(Equal("otherregion"))
+				Expect(vm.Zones).To(BeEmpty())
+			})
 			DescribeTable("should set IP forwarding on the network interface from nic-ip-forwarding", func(nicIPForwarding bool) {
 				ctx = options.ToContext(ctx, test.Options(test.OptionsFields{
 					NICIPForwarding: lo.ToPtr(nicIPForwarding),

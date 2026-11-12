@@ -117,6 +117,9 @@ type Options struct {
 	// [EXPERIMENTAL] VNets other than the cluster VNet whose subnets AKSNodeClass.spec.vnetSubnetID may reference,
 	// keyed by VNet resource ID, with the VNet resource GUID as value. Consumers must use AdditionalVNETGUID.
 	AdditionalVNETGUIDs map[string]string `json:"additionalVnetGuids,omitempty"`
+	// [EXPERIMENTAL] Locations of the VNets in AdditionalVNETGUIDs that are not in the cluster location,
+	// keyed by VNet resource ID. Consumers must use AdditionalVNETLocation.
+	AdditionalVNETLocations map[string]string `json:"additionalVnetLocations,omitempty"`
 	// [EXPERIMENTAL] Enables IP forwarding on node NICs, so nodes accept traffic routed to their pod CIDR by user-defined routes.
 	NICIPForwarding bool `json:"nicIPForwarding,omitempty"`
 
@@ -188,6 +191,11 @@ func (o *Options) AddFlags(fs *coreoptions.FlagSet) {
 		panic(fmt.Sprintf("failed to parse ADDITIONAL_VNET_GUIDS from string %q: %s", env.WithDefaultString("ADDITIONAL_VNET_GUIDS", ""), err))
 	}
 	fs.Var(additionalVNETGUIDsFlag, "additional-vnet-guids", "[EXPERIMENTAL] VNets other than the cluster VNet whose subnets AKSNodeClass.spec.vnetSubnetID may reference. Format is vnetResourceID1=vnetGUID1,vnetResourceID2=vnetGUID2. The VNets must be in the cluster subscription and peered with the cluster VNet. Nodes in these VNets are not added to the cluster load balancer backend pools, so the subnets need their own outbound connectivity.")
+	additionalVNETLocationsFlag := k8sflag.NewMapStringString(&o.AdditionalVNETLocations)
+	if err := additionalVNETLocationsFlag.Set(env.WithDefaultString("ADDITIONAL_VNET_LOCATIONS", "")); err != nil {
+		panic(fmt.Sprintf("failed to parse ADDITIONAL_VNET_LOCATIONS from string %q: %s", env.WithDefaultString("ADDITIONAL_VNET_LOCATIONS", ""), err))
+	}
+	fs.Var(additionalVNETLocationsFlag, "additional-vnet-locations", "[EXPERIMENTAL] Locations of the VNets listed in additional-vnet-guids that are not in the cluster location. Format is vnetResourceID1=location1,vnetResourceID2=location2. Nodes in these VNets are created in that location as regional (non-zonal) VMs, without the managed network security group, using instance types and images resolved for the cluster location.")
 	fs.BoolVar(&o.NICIPForwarding, "nic-ip-forwarding", env.WithDefaultBool("NIC_IP_FORWARDING", false), "[EXPERIMENTAL] If set to true, IP forwarding is enabled on node network interfaces.")
 	fs.BoolVar(&o.EnableAzureSDKLogging, "enable-azure-sdk-logging", env.WithDefaultBool("ENABLE_AZURE_SDK_LOGGING", true), "If set to false then Azure SDK middleware logging is disabled for debugging, and won't be logging all HTTP requests/responses to Azure APIs.")
 }

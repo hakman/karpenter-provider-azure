@@ -25,6 +25,7 @@ import (
 
 	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
+	"github.com/samber/lo"
 	"go.uber.org/multierr"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/arm"
@@ -43,6 +44,7 @@ func (o *Options) Validate() error {
 		o.validateVMMemoryOverheadPercent(),
 		o.validateVnetSubnetID(),
 		o.validateAdditionalVNETGUIDs(),
+		o.validateAdditionalVNETLocations(),
 		o.validateProvisionMode(),
 		o.validateUseSIG(),
 		o.validateAdminUsername(),
@@ -124,6 +126,18 @@ func (o *Options) validateAdditionalVNETGUIDs() error {
 		}
 		if uuid.Validate(guid) != nil {
 			return fmt.Errorf("additional-vnet-guids value %q for %q is not a valid vnet guid", guid, vnetID)
+		}
+	}
+	return nil
+}
+
+func (o *Options) validateAdditionalVNETLocations() error {
+	for vnetID, location := range o.AdditionalVNETLocations {
+		if !lo.ContainsBy(lo.Keys(o.AdditionalVNETGUIDs), func(k string) bool { return strings.EqualFold(k, vnetID) }) {
+			return fmt.Errorf("additional-vnet-locations key %q is not listed in additional-vnet-guids", vnetID)
+		}
+		if location == "" {
+			return fmt.Errorf("additional-vnet-locations value for %q must not be empty", vnetID)
 		}
 	}
 	return nil

@@ -60,3 +60,14 @@ func (o *Options) SupportsWorkloadRuntime() bool {
 func (o *Options) SupportsNodePublicIP() bool {
 	return o.IsAKSMachineAPIMode()
 }
+
+// AdditionalVNETLocation returns the location of the subnet's VNet, and true, if one is set in
+// --additional-vnet-locations.
+func (o *Options) AdditionalVNETLocation(subnet utils.VnetSubnetResource) (string, bool) {
+	for vnetID, location := range o.AdditionalVNETLocations {
+		if strings.EqualFold(vnetID, subnet.VNetID()) {
+			return location, true
+		}
+	}
+	return "", false
+}
