@@ -911,7 +911,30 @@ func (p *DefaultVMProvider) beginLaunchInstance(
 	ultraSSD := resolveUltraSSDRequested(nodeClaim)
 	zone := selection.Zone()
 	placementScope := selection.PlacementScope()
-	launchTemplate, err := p.getLaunchTemplate(ctx, nodeClass, nodeClaim, instanceType, capacityType, placementScope, ultraSSD)
+
+	subnetID := lo.Ternary(nodeClass.Spec.VNETSubnetID != nil, lo.FromPtr(nodeClass.Spec.VNETSubnetID), options.FromContext(ctx).SubnetID)
+	subnet, err := utils.GetVnetSubnetIDComponents(subnetID)
+	if err != nil {
+		return nil, fmt.Errorf("parsing subnet ID: %w", err)
+	}
+	location := p.location
+	additionalVNETLocation, isAdditionalVNET := options.FromContext(ctx).AdditionalVNETLocation(subnet)
+	if isAdditionalVNET {
+		location = additionalVNETLocation
+	}
+	var topologyLabels map[string]string
+	if !strings.EqualFold(location, p.location) {
+		// The instance type, and with it the selected zone and the region label, were resolved for the
+		// cluster location. Create a regional VM and label the node with the location it is in.
+		zone = zones.Regional
+		placementScope = zones.PlacementScopeForZone(zone)
+		topologyLabels = map[string]string{
+			v1.LabelTopologyRegion: location,
+			v1.LabelTopologyZone:   zone,
+		}
+	}
+
+	launchTemplate, err := p.getLaunchTemplate(ctx, nodeClass, nodeClaim, instanceType, capacityType, placementScope, ultraSSD, topologyLabels)
 	if err != nil {
 		return nil, fmt.Errorf("getting launch template: %w", err)
 	}
@@ -921,20 +944,9 @@ func (p *DefaultVMProvider) beginLaunchInstance(
 		return nil, fmt.Errorf("getting backend pools: %w", err)
 	}
 	backendPools = filterBackendPools(backendPools, nodeClaim)
-	subnet, err := utils.GetVnetSubnetIDComponents(launchTemplate.SubnetID)
-	if err != nil {
-		return nil, fmt.Errorf("parsing subnet ID: %w", err)
-	}
-	location := p.location
-	additionalVNETLocation, isAdditionalVNET := options.FromContext(ctx).AdditionalVNETLocation(subnet)
 	if isAdditionalVNET {
 		// Load balancer backend pools only accept members from the load balancer's own VNet
 		backendPools = &loadbalancer.BackendAddressPools{}
-		location = additionalVNETLocation
-	}
-	if !strings.EqualFold(location, p.location) {
-		// The selected zone belongs to the cluster location, so create a regional VM
-		zone = zones.Regional
 	}
 	networkPlugin := options.FromContext(ctx).NetworkPlugin
 	networkPluginMode := options.FromContext(ctx).NetworkPluginMode
@@ -1101,6 +1113,7 @@ func (p *DefaultVMProvider) getLaunchTemplate(
 	capacityType string,
 	placementScope string,
 	ultraSSD bool,
+	topologyLabels map[string]string,
 ) (*launchtemplate.Template, error) {
 	// We need to get all single-valued requirement labels from the instance type and the nodeClaim to pass down to kubelet.
 	// We don't just include single-value labels from the instance type because in the case where the label is NOT single-value on the instance
@@ -1118,6 +1131,7 @@ func (p *DefaultVMProvider) getLaunchTemplate(
 			v1beta1.LabelPlacementScope: placementScope,
 			v1beta1.LabelUltraSSD:       fmt.Sprint(ultraSSD),
 		},
+		topologyLabels,
 	)
 
 	launchTemplate, err := p.launchTemplateProvider.GetTemplate(ctx, nodeClass, nodeClaim, instanceType, additionalLabels)

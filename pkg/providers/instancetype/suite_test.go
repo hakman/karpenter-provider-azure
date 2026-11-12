@@ -342,7 +342,7 @@ var _ = Describe("InstanceType Provider", func() {
 				ExpectApplied(ctx, env.Client, nodePool, nodeClass)
 				pod := coretest.UnschedulablePod()
 				ExpectProvisionedAndWaitForPromises(ctx, env.Client, cluster, cloudProvider, coreProvisioner, azureEnv, pod)
-				ExpectScheduled(ctx, env.Client, pod)
+				node := ExpectScheduled(ctx, env.Client, pod)
 
 				nic := azureEnv.NetworkInterfacesAPI.NetworkInterfacesCreateOrUpdateBehavior.CalledWithInput.Pop().Interface
 				Expect(lo.FromPtr(nic.Location)).To(Equal("otherregion"))
@@ -351,6 +351,16 @@ var _ = Describe("InstanceType Provider", func() {
 				vm := azureEnv.VirtualMachinesAPI.VirtualMachineCreateOrUpdateBehavior.CalledWithInput.Pop().VM
 				Expect(lo.FromPtr(vm.Location)).To(Equal("otherregion"))
 				Expect(vm.Zones).To(BeEmpty())
+
+				// the node is labeled with the location it is in, both by kubelet and through the NodeClaim
+				customData, err := base64.StdEncoding.DecodeString(lo.FromPtr(vm.Properties.OSProfile.CustomData))
+				Expect(err).ToNot(HaveOccurred())
+				Expect(string(customData)).To(SatisfyAll(
+					ContainSubstring("topology.kubernetes.io/region=otherregion"),
+					ContainSubstring("topology.kubernetes.io/zone=0"),
+				))
+				Expect(node.Labels).To(HaveKeyWithValue(v1.LabelTopologyRegion, "otherregion"))
+				Expect(node.Labels).To(HaveKeyWithValue(v1.LabelTopologyZone, "0"))
 			})
 		})
 		Context("VM Creation Failures", func() {
