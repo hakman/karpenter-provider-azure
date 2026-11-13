@@ -8,6 +8,7 @@ These designs are written but not implemented.
 
 <!-- Please add newer designs at the top of this list -->
 
+- [Nodes in other regions through additional VNets](./0016-nodes-in-additional-vnets.md) (experimental)
 - [Ultra SSD support](./0013-ultra-ssd-support.md)
 
 ## Completed
