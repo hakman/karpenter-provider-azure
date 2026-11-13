@@ -757,11 +757,6 @@ func (c *CloudProvider) vmInstanceToNodeClaim(ctx context.Context, vm *armcomput
 		labels[v1beta1.LabelPlacementScope] = zones.PlacementScopeForZone(zone)
 	}
 
-	// A VM in an additional VNet can be in a location other than the one its instance type was resolved for
-	if location := lo.FromPtr(vm.Location); location != "" && !strings.EqualFold(location, labels[corev1.LabelTopologyRegion]) {
-		labels[corev1.LabelTopologyRegion] = location
-	}
-
 	labels[karpv1.CapacityTypeLabelKey] = instance.GetCapacityTypeFromVM(vm)
 	labels[v1beta1.AKSLabelScaleSetPriority] = instance.GetScaleSetPriorityLabelFromVM(vm)
 	labels[v1beta1.AKSLabelPriority] = instance.GetPriorityLabelFromVM(vm)

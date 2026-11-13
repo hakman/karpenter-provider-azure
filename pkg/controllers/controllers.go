@@ -66,6 +66,7 @@ func NewControllers(
 	instanceTypesProvider instancetypeprovider.Provider,
 	unavailableOfferings *azurecache.UnavailableOfferings,
 	quotaProvider quota.Provider,
+	additionalQuotaProviders map[string]quota.Provider,
 	inClusterKubernetesInterface kubernetes.Interface,
 	managedKubernetesInterface kubernetes.Interface,
 	managedDynamicInterface dynamic.Interface,
@@ -92,6 +93,9 @@ func NewControllers(
 
 		instancetypecontroller.NewController(instanceTypesProvider),
 		quotacontroller.NewController(quotaProvider, clk),
+	}
+	for location, additionalQuotaProvider := range additionalQuotaProviders {
+		controllers = append(controllers, quotacontroller.NewControllerForLocation(location, additionalQuotaProvider, clk))
 	}
 	return controllers
 }

@@ -108,6 +108,9 @@ type Operator struct {
 	QuotaProvider             *quota.DefaultProvider
 	AZClient                  *azclient.AZClient
 
+	// AdditionalQuotaProviders holds the quota providers for locations other than the cluster's, keyed by location
+	AdditionalQuotaProviders map[string]quota.Provider
+
 	// SubscriptionID and Location identify the Azure scope this operator manages.
 	SubscriptionID string
 	Location       string
@@ -205,13 +208,40 @@ func NewOperator(ctx context.Context, operator *operator.Operator) (context.Cont
 			imagefamily.ImageCacheCleaningInterval),
 	)
 	quotaProvider := quota.NewProvider(azClient.UsageClient, azClient.QuotaCategoryVMFamilyMappingClient, azConfig.Location, operator.Clock)
-	instanceTypeProvider := instancetype.NewDefaultProvider(
-		azConfig.Location,
-		cache.New(instancetype.InstanceTypesCacheTTL, azurecache.DefaultCleanupInterval),
-		azClient.SKUClient,
-		pricingProvider,
-		unavailableOfferingsCache,
-		quotaProvider,
+	// Instance types, prices, quota and unavailable offerings are per location. Nodes in an additional VNet
+	// can be in a location other than the cluster's, so each such location gets its own.
+	additionalInstanceTypeProviders := map[string]*instancetype.DefaultProvider{}
+	additionalQuotaProviders := map[string]quota.Provider{}
+	additionalLocations := map[string]instance.AdditionalLocation{}
+	for _, location := range options.FromContext(ctx).AdditionalVNETs {
+		location = strings.ToLower(location)
+		if _, ok := additionalLocations[location]; ok || strings.EqualFold(location, azConfig.Location) {
+			continue
+		}
+		additionalLocations[location] = instance.AdditionalLocation{
+			UnavailableOfferings: azurecache.NewUnavailableOfferings(),
+			QuotaProvider:        quota.NewProvider(azClient.UsageClient, azClient.QuotaCategoryVMFamilyMappingClient, location, operator.Clock),
+		}
+		additionalQuotaProviders[location] = additionalLocations[location].QuotaProvider
+		additionalInstanceTypeProviders[location] = instancetype.NewDefaultProvider(
+			location,
+			cache.New(instancetype.InstanceTypesCacheTTL, azurecache.DefaultCleanupInterval),
+			azClient.SKUClient,
+			pricing.NewProvider(ctx, env, pricing.NewAPI(env.Cloud), location, operator.Elected()),
+			additionalLocations[location].UnavailableOfferings,
+			additionalLocations[location].QuotaProvider,
+		)
+	}
+	instanceTypeProvider := instancetype.NewRegionalProvider(
+		instancetype.NewDefaultProvider(
+			azConfig.Location,
+			cache.New(instancetype.InstanceTypesCacheTTL, azurecache.DefaultCleanupInterval),
+			azClient.SKUClient,
+			pricingProvider,
+			unavailableOfferingsCache,
+			quotaProvider,
+		),
+		additionalInstanceTypeProviders,
 	)
 
 	// Ensure we're able to hydrate instance types before starting any controllers
@@ -273,6 +303,7 @@ func NewOperator(ctx context.Context, operator *operator.Operator) (context.Cont
 		options.FromContext(ctx).DiskEncryptionSetID,
 		env,
 		quotaProvider,
+		additionalLocations,
 	)
 
 	aksMachineCache := machinecache.New(
@@ -314,6 +345,7 @@ func NewOperator(ctx context.Context, operator *operator.Operator) (context.Cont
 		AKSMachineProvider:           aksMachineInstanceProvider,
 		LoadBalancerProvider:         loadBalancerProvider,
 		QuotaProvider:                quotaProvider,
+		AdditionalQuotaProviders:     additionalQuotaProviders,
 		AZClient:                     azClient,
 		SubscriptionID:               azConfig.SubscriptionID,
 		Location:                     azConfig.Location,

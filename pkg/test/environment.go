@@ -108,7 +108,7 @@ type Environment struct {
 	UnavailableOfferingsCache   *azurecache.UnavailableOfferings
 
 	// Providers
-	InstanceTypesProvider        *instancetype.DefaultProvider
+	InstanceTypesProvider        *instancetype.RegionalProvider
 	VMInstanceProvider           instance.VMProvider
 	AKSMachineProvider           instance.AKSMachineProvider
 	PricingProvider              *pricing.Provider
@@ -186,13 +186,34 @@ func NewRegionalEnvironment(ctx context.Context, env *coretest.Environment, regi
 	kubernetesVersionProvider := kubernetesversion.NewKubernetesVersionProvider(region, env.KubernetesInterface, kubernetesVersionCache, aksManagedClustersAPI)
 	imageFamilyProvider := imagefamily.NewProvider(communityImageVersionsAPI, region, subscription, nodeImageVersionsAPI, nodeImagesCache)
 	quotaProvider := quota.NewProvider(usageAPI, quotaCategoryVMFamilyMappingAPI, region, clock.RealClock{})
-	instanceTypesProvider := instancetype.NewDefaultProvider(
-		region,
-		instanceTypeCache,
-		skusAPI,
-		pricingProvider,
-		unavailableOfferingsCache,
-		quotaProvider)
+	// Like the operator, give each location of an additional VNet its own instance types, quota and unavailable offerings
+	additionalInstanceTypeProviders := map[string]*instancetype.DefaultProvider{}
+	additionalLocations := map[string]instance.AdditionalLocation{}
+	for _, location := range testOptions.AdditionalVNETs {
+		if _, ok := additionalLocations[location]; ok || location == region {
+			continue
+		}
+		additionalLocations[location] = instance.AdditionalLocation{
+			UnavailableOfferings: azurecache.NewUnavailableOfferings(),
+			QuotaProvider:        quota.NewProvider(&fake.UsageAPI{}, quotaCategoryVMFamilyMappingAPI, location, clock.RealClock{}),
+		}
+		additionalInstanceTypeProviders[location] = instancetype.NewDefaultProvider(
+			location,
+			cache.New(instancetype.InstanceTypesCacheTTL, azurecache.DefaultCleanupInterval),
+			&fake.ResourceSKUsAPI{Location: location},
+			pricing.NewProvider(ctx, azureEnv, pricingAPI, location, make(chan struct{})),
+			additionalLocations[location].UnavailableOfferings,
+			additionalLocations[location].QuotaProvider)
+	}
+	instanceTypesProvider := instancetype.NewRegionalProvider(
+		instancetype.NewDefaultProvider(
+			region,
+			instanceTypeCache,
+			skusAPI,
+			pricingProvider,
+			unavailableOfferingsCache,
+			quotaProvider),
+		additionalInstanceTypeProviders)
 	imageFamilyResolver := imagefamily.NewDefaultResolver(env.Client, imageFamilyProvider, instanceTypesProvider, nodeBootstrappingAPI)
 	networkSecurityGroupProvider := networksecuritygroup.NewProvider(
 		networkSecurityGroupAPI,
@@ -281,6 +302,7 @@ func NewRegionalEnvironment(ctx context.Context, env *coretest.Environment, regi
 		testOptions.DiskEncryptionSetID,
 		azureEnv,
 		quotaProvider,
+		additionalLocations,
 	)
 
 	if testOptions.IsAKSMachineAPIMode() && testOptions.AKSMachinesPoolName != "" {

@@ -18,6 +18,7 @@ package instance
 
 import (
 	"context"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -33,6 +34,8 @@ import (
 type quotaMetadata struct {
 	familyName string
 	vCPUs      int64
+	// location is where the quota is consumed. Empty means the cluster location.
+	location string
 	// eligible is true only for ordinary on-demand capacity. Spot and capacity-reservation-backed
 	// instances set this to false
 	eligible bool
@@ -43,6 +46,8 @@ type quotaMetadata struct {
 type quotaLifecycle struct {
 	provider             quota.Provider
 	instanceTypeProvider instancetype.Provider
+	// additional holds the providers for locations other than the cluster's, keyed by lowercase location
+	additional map[string]quota.Provider
 }
 
 func newQuotaLifecycle(provider quota.Provider, instanceTypeProvider instancetype.Provider) *quotaLifecycle {
@@ -52,6 +57,14 @@ func newQuotaLifecycle(provider quota.Provider, instanceTypeProvider instancetyp
 	}
 }
 
+// providerFor returns the quota provider for a location, which is the cluster's unless the location has its own.
+func (q *quotaLifecycle) providerFor(location string) quota.Provider {
+	if provider, ok := q.additional[strings.ToLower(location)]; ok {
+		return provider
+	}
+	return q.provider
+}
+
 func (q *quotaLifecycle) snapshotGeneration() uint64 {
 	return q.provider.SnapshotGeneration()
 }
@@ -59,14 +72,14 @@ func (q *quotaLifecycle) snapshotGeneration() uint64 {
 // recordCreate records an accepted create using the same immutable metadata retained by its promise.
 func (q *quotaLifecycle) recordCreate(generation uint64, nodeClaim *karpv1.NodeClaim, metadata quotaMetadata) {
 	if metadata.eligible {
-		q.provider.RecordCreate(generation, nodeClaim, metadata.familyName, metadata.vCPUs)
+		q.providerFor(metadata.location).RecordCreate(generation, nodeClaim, metadata.familyName, metadata.vCPUs)
 	}
 }
 
 // recordDelete applies a confirmed deletion using launch metadata already held by a promise.
 func (q *quotaLifecycle) recordDelete(nodeClaim *karpv1.NodeClaim, metadata quotaMetadata) {
 	if metadata.eligible {
-		q.provider.RecordDelete(nodeClaim, metadata.familyName, metadata.vCPUs)
+		q.providerFor(metadata.location).RecordDelete(nodeClaim, metadata.familyName, metadata.vCPUs)
 	}
 }
 
@@ -81,7 +94,9 @@ func (q *quotaLifecycle) recordDeleteFromNodeClaim(ctx context.Context, nodeClai
 		log.FromContext(ctx).V(1).Info("skipping quota delete adjustment, launch-time capacity reservation metadata is missing")
 		return
 	}
-	q.recordDelete(nodeClaim, q.metadata(ctx, nodeClaim.Labels[corev1.LabelInstanceTypeStable], karpv1.CapacityTypeOnDemand, capacityReservationGroupID != ""))
+	metadata := q.metadata(ctx, nodeClaim.Labels[corev1.LabelInstanceTypeStable], karpv1.CapacityTypeOnDemand, capacityReservationGroupID != "")
+	metadata.location = nodeClaim.Labels[corev1.LabelTopologyRegion]
+	q.recordDelete(nodeClaim, metadata)
 }
 
 // metadata resolves the family and vCPU magnitude used by the shared quota provider.

@@ -40,6 +40,7 @@ const (
 )
 
 type Controller struct {
+	name                 string
 	quotaProvider        quota.Provider
 	clock                clock.PassiveClock
 	lastSuccessfulUpdate time.Time
@@ -47,13 +48,21 @@ type Controller struct {
 
 func NewController(quotaProvider quota.Provider, clk clock.PassiveClock) *Controller {
 	return &Controller{
+		name:          "quota",
 		quotaProvider: quotaProvider,
 		clock:         clk,
 	}
 }
 
+// NewControllerForLocation returns a controller for the quota of a location other than the cluster's
+func NewControllerForLocation(location string, quotaProvider quota.Provider, clk clock.PassiveClock) *Controller {
+	c := NewController(quotaProvider, clk)
+	c.name = "quota-" + location
+	return c
+}
+
 func (c *Controller) Reconcile(ctx context.Context) (reconciler.Result, error) {
-	ctx = injection.WithControllerName(ctx, "quota")
+	ctx = injection.WithControllerName(ctx, c.name)
 
 	if err := c.quotaProvider.Update(ctx); err != nil {
 		log.FromContext(ctx).Error(err, "updating quota usages")
@@ -72,7 +81,7 @@ func (c *Controller) Reconcile(ctx context.Context) (reconciler.Result, error) {
 
 func (c *Controller) Register(_ context.Context, m manager.Manager) error {
 	return controllerruntime.NewControllerManagedBy(m).
-		Named("quota").
+		Named(c.name).
 		WatchesRawSource(singleton.Source()).
 		Complete(singleton.AsReconciler(c))
 }

@@ -187,6 +187,9 @@ type DefaultVMProvider struct {
 	errorHandling                *offerings.ResponseErrorHandler
 	env                          *auth.Environment
 
+	// additionalErrorHandling holds the handlers for locations other than the cluster's, keyed by lowercase location
+	additionalErrorHandling map[string]*offerings.ResponseErrorHandler
+
 	vmListQuery, nicListQuery string
 	deletingVMs               sets.Set[string] // tracks in-flight delete operations by VM name
 	deletingVMsMu             sync.RWMutex
@@ -194,6 +197,13 @@ type DefaultVMProvider struct {
 
 	nicListQueryWithAKSMachines string // Temporary. This is to help mitigate CCM bug where it incorrectly creates unused NICs by enabling garbage collection from Karpenter.
 	// Should be safe to remove once https://github.com/kubernetes-sigs/cloud-provider-azure/pull/11267 is rolled out.
+}
+
+// AdditionalLocation holds what is tracked per location, for a location other than the cluster's
+// that nodes are created in (see options.AdditionalVNETs).
+type AdditionalLocation struct {
+	UnavailableOfferings *cache.UnavailableOfferings
+	QuotaProvider        quota.Provider
 }
 
 func NewDefaultVMProvider(
@@ -211,7 +221,15 @@ func NewDefaultVMProvider(
 	diskEncryptionSetID string,
 	env *auth.Environment,
 	quotaProvider quota.Provider,
+	additionalLocations map[string]AdditionalLocation,
 ) *DefaultVMProvider {
+	quotaLifecycle := newQuotaLifecycle(quotaProvider, instanceTypeProvider)
+	quotaLifecycle.additional = map[string]quota.Provider{}
+	additionalErrorHandling := map[string]*offerings.ResponseErrorHandler{}
+	for location, additional := range additionalLocations {
+		quotaLifecycle.additional[strings.ToLower(location)] = additional.QuotaProvider
+		additionalErrorHandling[strings.ToLower(location)] = offerings.NewResponseErrorHandler(additional.UnavailableOfferings)
+	}
 	return &DefaultVMProvider{
 		azClient:                     azClient,
 		instanceTypeProvider:         instanceTypeProvider,
@@ -232,7 +250,9 @@ func NewDefaultVMProvider(
 
 		errorHandling:  offerings.NewResponseErrorHandler(offeringsCache),
 		deletingVMs:    sets.New[string](),
-		quotaLifecycle: newQuotaLifecycle(quotaProvider, instanceTypeProvider),
+		quotaLifecycle: quotaLifecycle,
+
+		additionalErrorHandling: additionalErrorHandling,
 	}
 }
 
@@ -247,8 +267,12 @@ func (p *DefaultVMProvider) BeginCreate(
 	nodeClaim *karpv1.NodeClaim,
 	instanceTypes []*corecloudprovider.InstanceType,
 ) (*VirtualMachinePromise, error) {
-	quotaGeneration := p.quotaLifecycle.snapshotGeneration()
-	vmPromise, err := p.beginLaunchInstance(ctx, nodeClass, nodeClaim, instanceTypes)
+	location, isAdditionalVNET, err := p.launchLocation(ctx, nodeClass)
+	if err != nil {
+		return nil, err
+	}
+	quotaGeneration := p.quotaLifecycle.providerFor(location).SnapshotGeneration()
+	vmPromise, err := p.beginLaunchInstance(ctx, nodeClass, nodeClaim, instanceTypes, location, isAdditionalVNET)
 	if err != nil {
 		// There may be orphan NICs (created before promise started)
 		// This err block is hit only for sync failures. Async (VM provisioning) failures will be returned by the vmPromise.Wait() function
@@ -265,6 +289,7 @@ func (p *DefaultVMProvider) BeginCreate(
 			GetCapacityTypeFromVM(vmPromise.VM),
 			CapacityReservationGroupID(vmPromise.VM) != "",
 		)
+		vmPromise.quotaMetadata.location = location
 		p.quotaLifecycle.recordCreate(quotaGeneration, nodeClaim, vmPromise.quotaMetadata)
 	}
 	vm := vmPromise.VM
@@ -853,6 +878,20 @@ func filterBackendPools(pools *loadbalancer.BackendAddressPools, nodeClaim *karp
 	return pools
 }
 
+// launchLocation returns the location to create the nodes of a node class in, and whether their subnet is in
+// an additional VNet. Only such a subnet can be in a location other than the cluster's.
+func (p *DefaultVMProvider) launchLocation(ctx context.Context, nodeClass *v1beta1.AKSNodeClass) (string, bool, error) {
+	subnetID := lo.Ternary(nodeClass.Spec.VNETSubnetID != nil, lo.FromPtr(nodeClass.Spec.VNETSubnetID), options.FromContext(ctx).SubnetID)
+	subnet, err := utils.GetVnetSubnetIDComponents(subnetID)
+	if err != nil {
+		return "", false, fmt.Errorf("parsing subnet ID: %w", err)
+	}
+	if location, ok := options.FromContext(ctx).AdditionalVNETLocation(subnet); ok {
+		return location, true, nil
+	}
+	return p.location, false, nil
+}
+
 // beginLaunchInstance starts the launch of a VM instance.
 // The returned VirtualMachinePromise must be called to gather any errors
 // that are retrieved during async provisioning, as well as to complete the provisioning process.
@@ -863,6 +902,8 @@ func (p *DefaultVMProvider) beginLaunchInstance(
 	nodeClass *v1beta1.AKSNodeClass,
 	nodeClaim *karpv1.NodeClaim,
 	instanceTypes []*corecloudprovider.InstanceType,
+	location string,
+	isAdditionalVNET bool,
 ) (*VirtualMachinePromise, error) {
 	// We assume that if a vm exists, we successfully created it with the right parameters from the nodeclaims during another run before a restart.
 	// there are some non-deterministic properties that may change.
@@ -911,30 +952,13 @@ func (p *DefaultVMProvider) beginLaunchInstance(
 	ultraSSD := resolveUltraSSDRequested(nodeClaim)
 	zone := selection.Zone()
 	placementScope := selection.PlacementScope()
-
-	subnetID := lo.Ternary(nodeClass.Spec.VNETSubnetID != nil, lo.FromPtr(nodeClass.Spec.VNETSubnetID), options.FromContext(ctx).SubnetID)
-	subnet, err := utils.GetVnetSubnetIDComponents(subnetID)
-	if err != nil {
-		return nil, fmt.Errorf("parsing subnet ID: %w", err)
-	}
-	location := p.location
-	additionalVNETLocation, isAdditionalVNET := options.FromContext(ctx).AdditionalVNETLocation(subnet)
-	if isAdditionalVNET {
-		location = additionalVNETLocation
-	}
-	var topologyLabels map[string]string
-	if !strings.EqualFold(location, p.location) {
-		// The instance type, and with it the selected zone and the region label, were resolved for the
-		// cluster location. Create a regional VM and label the node with the location it is in.
-		zone = zones.Regional
-		placementScope = zones.PlacementScopeForZone(zone)
-		topologyLabels = map[string]string{
-			v1.LabelTopologyRegion: location,
-			v1.LabelTopologyZone:   zone,
-		}
+	// Unavailable offerings are tracked per location
+	errorHandling := p.errorHandling
+	if additional, ok := p.additionalErrorHandling[strings.ToLower(location)]; ok {
+		errorHandling = additional
 	}
 
-	launchTemplate, err := p.getLaunchTemplate(ctx, nodeClass, nodeClaim, instanceType, capacityType, placementScope, ultraSSD, topologyLabels)
+	launchTemplate, err := p.getLaunchTemplate(ctx, nodeClass, nodeClaim, instanceType, capacityType, placementScope, ultraSSD)
 	if err != nil {
 		return nil, fmt.Errorf("getting launch template: %w", err)
 	}
@@ -1022,7 +1046,7 @@ func (p *DefaultVMProvider) beginLaunchInstance(
 		if skuErr != nil {
 			return nil, fmt.Errorf("failed to get instance type %q: %w", instanceType.Name, err)
 		}
-		handledError := p.errorHandling.Handle(ctx, sku, instanceType, zone, capacityType, nodeClass.GetCapacityReservationGroupID(), err)
+		handledError := errorHandling.Handle(ctx, sku, instanceType, zone, capacityType, nodeClass.GetCapacityReservationGroupID(), err)
 		if handledError != nil {
 			// At this point, the error is handled in provider layer (e.g., unavailable offerings cache), but not yet Karpenter core.
 			// Thus the error needs to be returned.
@@ -1067,7 +1091,7 @@ func (p *DefaultVMProvider) beginLaunchInstance(
 				if skuErr != nil {
 					return fmt.Errorf("failed to get instance type %q: %w", instanceType.Name, err)
 				}
-				handledError := p.errorHandling.Handle(ctx, sku, instanceType, zone, capacityType, nodeClass.GetCapacityReservationGroupID(), err)
+				handledError := errorHandling.Handle(ctx, sku, instanceType, zone, capacityType, nodeClass.GetCapacityReservationGroupID(), err)
 				if handledError != nil {
 					// At this point, the error is handled in provider layer (e.g., unavailable offerings cache), but not yet Karpenter core.
 					// Thus the error needs to be returned.
@@ -1113,7 +1137,6 @@ func (p *DefaultVMProvider) getLaunchTemplate(
 	capacityType string,
 	placementScope string,
 	ultraSSD bool,
-	topologyLabels map[string]string,
 ) (*launchtemplate.Template, error) {
 	// We need to get all single-valued requirement labels from the instance type and the nodeClaim to pass down to kubelet.
 	// We don't just include single-value labels from the instance type because in the case where the label is NOT single-value on the instance
@@ -1131,7 +1154,6 @@ func (p *DefaultVMProvider) getLaunchTemplate(
 			v1beta1.LabelPlacementScope: placementScope,
 			v1beta1.LabelUltraSSD:       fmt.Sprint(ultraSSD),
 		},
-		topologyLabels,
 	)
 
 	launchTemplate, err := p.launchTemplateProvider.GetTemplate(ctx, nodeClass, nodeClaim, instanceType, additionalLabels)

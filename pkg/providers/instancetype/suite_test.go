@@ -332,35 +332,125 @@ var _ = Describe("InstanceType Provider", func() {
 				Expect(nic).NotTo(BeNil())
 				Expect(lo.FromPtr(nic.Interface.Properties.IPConfigurations[0].Properties.Subnet.ID)).To(Equal("/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/sillygeese/providers/Microsoft.Network/virtualNetworks/karpenter/subnets/nodeclassSubnet"))
 			})
-			It("should create the network interface and VM in the location of an additional VNet", func() {
-				additionalVNETID := "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/remote-rg/providers/Microsoft.Network/virtualNetworks/remote-vnet"
-				ctx = options.ToContext(ctx, test.Options(test.OptionsFields{
-					AdditionalVNETs: map[string]string{additionalVNETID: "otherregion"},
-				}))
-				nodeClass.Spec.VNETSubnetID = lo.ToPtr(additionalVNETID + "/subnets/nodes")
+		})
+		Context("Additional VNet in another location", func() {
+			// The cluster is in a location without zones, the additional VNet in a location with zones
+			const additionalVNETID = "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/remote-rg/providers/Microsoft.Network/virtualNetworks/remote-vnet"
+			var azureEnvAdditional *test.Environment
+			var cloudProviderAdditional *cloudprovider.CloudProvider
+			var clusterAdditional *state.Cluster
+			var coreProvisionerAdditional *provisioning.Provisioner
+			var clusterNodeClass *v1beta1.AKSNodeClass
 
+			onDemandAvailable := func(instanceTypes []*corecloudprovider.InstanceType, name string) bool {
+				GinkgoHelper()
+				instanceType, ok := lo.Find(instanceTypes, func(it *corecloudprovider.InstanceType) bool { return it.Name == name })
+				Expect(ok).To(BeTrue(), "expected to find instance type "+name)
+				return lo.ContainsBy(instanceType.Offerings, func(offering *corecloudprovider.Offering) bool {
+					return offering.Available && offering.Requirements.Get(karpv1.CapacityTypeLabelKey).Has(karpv1.CapacityTypeOnDemand)
+				})
+			}
+
+			BeforeEach(func() {
+				ctx = options.ToContext(ctx, test.Options(test.OptionsFields{
+					AdditionalVNETs: map[string]string{additionalVNETID: fake.Region},
+				}))
+				azureEnvAdditional = test.NewEnvironmentNonZonal(ctx, env)
+				cloudProviderAdditional = cloudprovider.New(azureEnvAdditional.InstanceTypesProvider, azureEnvAdditional.VMInstanceProvider, azureEnvAdditional.AKSMachineProvider, events.NewRecorder(&record.FakeRecorder{}), env.Client, azureEnvAdditional.ImageProvider, azureEnvAdditional.InstanceTypeStore, coreoptions.FromContext(ctx).LegacyNodeRepair)
+				clusterAdditional = state.NewCluster(fakeClock, env.Client, cloudProviderAdditional)
+				coreProvisionerAdditional = provisioning.NewProvisioner(env.Client, events.NewRecorder(&record.FakeRecorder{}), cloudProviderAdditional, clusterAdditional, fakeClock, deviceallocation.NewController(env.Client), virtualpods.NewVirtualPodCache(env.Client))
+
+				clusterNodeClass = nodeClass.DeepCopy()
+				nodeClass.Spec.VNETSubnetID = lo.ToPtr(additionalVNETID + "/subnets/nodes")
+			})
+
+			It("should create the node in the location of the additional VNet, in a zone of that location", func() {
 				ExpectApplied(ctx, env.Client, nodePool, nodeClass)
-				pod := coretest.UnschedulablePod()
-				ExpectProvisionedAndWaitForPromises(ctx, env.Client, cluster, cloudProvider, coreProvisioner, azureEnv, pod)
+				pod := coretest.UnschedulablePod(coretest.PodOptions{NodeSelector: map[string]string{
+					v1.LabelTopologyRegion: fake.Region,
+					v1.LabelTopologyZone:   fakeZone1,
+				}})
+				ExpectProvisionedAndWaitForPromises(ctx, env.Client, clusterAdditional, cloudProviderAdditional, coreProvisionerAdditional, azureEnvAdditional, pod)
 				node := ExpectScheduled(ctx, env.Client, pod)
 
-				nic := azureEnv.NetworkInterfacesAPI.NetworkInterfacesCreateOrUpdateBehavior.CalledWithInput.Pop().Interface
-				Expect(lo.FromPtr(nic.Location)).To(Equal("otherregion"))
+				nic := azureEnvAdditional.NetworkInterfacesAPI.NetworkInterfacesCreateOrUpdateBehavior.CalledWithInput.Pop().Interface
+				Expect(lo.FromPtr(nic.Location)).To(Equal(fake.Region))
 				Expect(nic.Properties.NetworkSecurityGroup).To(BeNil())
 
-				vm := azureEnv.VirtualMachinesAPI.VirtualMachineCreateOrUpdateBehavior.CalledWithInput.Pop().VM
-				Expect(lo.FromPtr(vm.Location)).To(Equal("otherregion"))
-				Expect(vm.Zones).To(BeEmpty())
+				vm := azureEnvAdditional.VirtualMachinesAPI.VirtualMachineCreateOrUpdateBehavior.CalledWithInput.Pop().VM
+				Expect(lo.FromPtr(vm.Location)).To(Equal(fake.Region))
+				Expect(lo.FromSlicePtr(vm.Zones)).To(Equal([]string{"1"}))
 
 				// the node is labeled with the location it is in, both by kubelet and through the NodeClaim
 				customData, err := base64.StdEncoding.DecodeString(lo.FromPtr(vm.Properties.OSProfile.CustomData))
 				Expect(err).ToNot(HaveOccurred())
 				Expect(string(customData)).To(SatisfyAll(
-					ContainSubstring("topology.kubernetes.io/region=otherregion"),
-					ContainSubstring("topology.kubernetes.io/zone=0"),
+					ContainSubstring("topology.kubernetes.io/region="+fake.Region),
+					ContainSubstring("topology.kubernetes.io/zone="+fakeZone1),
 				))
-				Expect(node.Labels).To(HaveKeyWithValue(v1.LabelTopologyRegion, "otherregion"))
-				Expect(node.Labels).To(HaveKeyWithValue(v1.LabelTopologyZone, "0"))
+				Expect(node.Labels).To(HaveKeyWithValue(v1.LabelTopologyRegion, fake.Region))
+				Expect(node.Labels).To(HaveKeyWithValue(v1.LabelTopologyZone, fakeZone1))
+			})
+			It("should offer the instance types of the location of the node class", func() {
+				instanceTypes, err := azureEnvAdditional.InstanceTypesProvider.List(ctx, nodeClass)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(instanceTypes).ToNot(BeEmpty())
+				for _, it := range instanceTypes {
+					Expect(it.Requirements.Get(v1.LabelTopologyRegion).Values()).To(ConsistOf(fake.Region))
+				}
+
+				instanceTypes, err = azureEnvAdditional.InstanceTypesProvider.List(ctx, clusterNodeClass)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(instanceTypes).ToNot(BeEmpty())
+				for _, it := range instanceTypes {
+					Expect(it.Requirements.Get(v1.LabelTopologyRegion).Values()).To(ConsistOf(fake.RegionNonZonal))
+				}
+			})
+			It("should track unavailable offerings per location", func() {
+				azureEnvAdditional.VirtualMachinesAPI.VirtualMachineCreateOrUpdateBehavior.Error.Set(
+					&azcore.ResponseError{ErrorCode: sdkerrors.ZoneAllocationFailed},
+				)
+				clusterSeqNum := azureEnvAdditional.UnavailableOfferingsCache.SeqNum()
+
+				ExpectApplied(ctx, env.Client, nodePool, nodeClass)
+				pod := coretest.UnschedulablePod(coretest.PodOptions{NodeSelector: map[string]string{
+					v1.LabelInstanceTypeStable: "Standard_D2_v3",
+					v1.LabelTopologyZone:       fakeZone1,
+				}})
+				ExpectLaunched(ctx, env.Client, cloudProviderAdditional, coreProvisionerAdditional, pod)
+				ExpectNotScheduled(ctx, env.Client, pod)
+				Eventually(func() []*karpv1.NodeClaim { return ExpectNodeClaims(ctx, env.Client) }).To(HaveLen(0))
+
+				// the failure is recorded for the location of the additional VNet, not for the cluster location
+				Expect(azureEnvAdditional.UnavailableOfferingsCache.SeqNum()).To(Equal(clusterSeqNum))
+				instanceTypes, err := azureEnvAdditional.InstanceTypesProvider.List(ctx, nodeClass)
+				Expect(err).ToNot(HaveOccurred())
+				instanceType, ok := lo.Find(instanceTypes, func(it *corecloudprovider.InstanceType) bool { return it.Name == "Standard_D2_v3" })
+				Expect(ok).To(BeTrue())
+				for _, offering := range instanceType.Offerings {
+					if offering.Requirements.Get(v1.LabelTopologyZone).Has(fakeZone1) {
+						Expect(offering.Available).To(BeFalse())
+					}
+				}
+			})
+			It("should check quota per location", func() {
+				azureEnvAdditional.UsageAPI.Usages.Append(
+					&armcompute.Usage{
+						Name:         &armcompute.UsageName{Value: lo.ToPtr(defaultTestSKU.GetFamilyName())},
+						CurrentValue: lo.ToPtr[int32](100),
+						Limit:        lo.ToPtr[int64](100),
+					},
+				)
+				lo.Must0(azureEnvAdditional.QuotaProvider.Update(ctx))
+
+				// the quota of the cluster location is exhausted, the quota of the location of the additional VNet is not
+				instanceTypes, err := azureEnvAdditional.InstanceTypesProvider.List(ctx, clusterNodeClass)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(onDemandAvailable(instanceTypes, *defaultTestSKU.Name)).To(BeFalse())
+
+				instanceTypes, err = azureEnvAdditional.InstanceTypesProvider.List(ctx, nodeClass)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(onDemandAvailable(instanceTypes, *defaultTestSKU.Name)).To(BeTrue())
 			})
 		})
 		Context("VM Creation Failures", func() {

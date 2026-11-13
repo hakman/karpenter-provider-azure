@@ -100,6 +100,7 @@ func main() {
 			op.InstanceTypesProvider,
 			op.UnavailableOfferingsCache,
 			op.QuotaProvider,
+			op.AdditionalQuotaProviders,
 			op.InClusterKubernetesInterface,
 			op.KubernetesInterface,
 			op.ManagedDynamicInterface,
