@@ -62,6 +62,7 @@ func (r *SubnetReconciler) Reconcile(ctx context.Context, nodeClass *v1beta1.AKS
 	return r.validateVNETSubnetID(ctx, nodeClass)
 }
 
+//nolint:gocyclo // Keep the subnet validation steps together.
 func (r *SubnetReconciler) validateVNETSubnetID(ctx context.Context, nodeClass *v1beta1.AKSNodeClass) (reconcile.Result, error) {
 	clusterSubnetID := options.FromContext(ctx).SubnetID
 	subnetID := lo.Ternary(nodeClass.Spec.VNETSubnetID != nil, lo.FromPtr(nodeClass.Spec.VNETSubnetID), options.FromContext(ctx).SubnetID)

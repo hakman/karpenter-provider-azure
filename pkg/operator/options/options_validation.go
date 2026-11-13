@@ -108,7 +108,7 @@ func (o *Options) validateAdditionalVNETs() error {
 	}
 	clusterSubnet, err := utils.GetVnetSubnetIDComponents(o.SubnetID)
 	if err != nil {
-		return nil // reported by validateVnetSubnetID
+		return nil //nolint:nilerr // reported by validateVnetSubnetID
 	}
 	for vnetID, location := range o.AdditionalVNETs {
 		// Reuse the subnet parser by appending a placeholder subnet name

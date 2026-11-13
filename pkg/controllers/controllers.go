@@ -78,7 +78,7 @@ func NewControllers(
 	networkPolicy string,
 	networkPlugin string,
 ) []controller.Controller {
-	controllers := []controller.Controller{
+	controllers := []controller.Controller{ //nolint:prealloc // built once at startup
 		nodeclasshash.NewController(kubeClient),
 		nodeclassstatus.NewController(kubeClient, subscriptionID, location, kubernetesVersionProvider, nodeImageProvider, inClusterKubernetesInterface, managedKubernetesInterface, managedDynamicInterface, subnetsClient, diskEncryptionSetsClient, parsedDiskEncryptionSetID, networkPolicy, networkPlugin,
 			capacityReservationGroupsClient, capacityReservationsClient, instanceTypesProvider, unavailableOfferings, options.FromContext(ctx).SystemNamespace),
