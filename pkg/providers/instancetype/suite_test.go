@@ -385,6 +385,7 @@ var _ = Describe("InstanceType Provider", func() {
 				customData, err := base64.StdEncoding.DecodeString(lo.FromPtr(vm.Properties.OSProfile.CustomData))
 				Expect(err).ToNot(HaveOccurred())
 				Expect(string(customData)).To(SatisfyAll(
+					ContainSubstring("LOCATION="+fake.Region),
 					ContainSubstring("topology.kubernetes.io/region="+fake.Region),
 					ContainSubstring("topology.kubernetes.io/zone="+fakeZone1),
 				))

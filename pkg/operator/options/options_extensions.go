@@ -60,3 +60,16 @@ func (o *Options) AdditionalVNETLocation(subnet utils.VnetSubnetResource) (strin
 	}
 	return "", false
 }
+
+// AdditionalVNETLocationOfSubnetID is AdditionalVNETLocation for a subnet resource ID, such as
+// AKSNodeClass.spec.vnetSubnetID.
+func (o *Options) AdditionalVNETLocationOfSubnetID(subnetID *string) (string, bool) {
+	if len(o.AdditionalVNETs) == 0 || subnetID == nil {
+		return "", false
+	}
+	subnet, err := utils.GetVnetSubnetIDComponents(*subnetID)
+	if err != nil {
+		return "", false
+	}
+	return o.AdditionalVNETLocation(subnet)
+}

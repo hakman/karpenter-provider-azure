@@ -28,13 +28,16 @@ import (
 // TODO: no ability to simulate errors on the Pager.
 type CommunityGalleryImageVersionsAPI struct {
 	ImageVersions AtomicPtrSlice[armcompute.CommunityGalleryImageVersion]
+	// Locations records the location of each NewListPager call
+	Locations AtomicPtrSlice[string]
 }
 
 // assert that the fake implements the interface
 var _ imagefamilytypes.CommunityGalleryImageVersionsAPI = &CommunityGalleryImageVersionsAPI{}
 
 // NewListPager returns a new pager to return the next page of CommunityGalleryImageVersionsClientListResponse
-func (c *CommunityGalleryImageVersionsAPI) NewListPager(_ string, _ string, _ string, _ *armcompute.CommunityGalleryImageVersionsClientListOptions) *runtime.Pager[armcompute.CommunityGalleryImageVersionsClientListResponse] {
+func (c *CommunityGalleryImageVersionsAPI) NewListPager(location string, _ string, _ string, _ *armcompute.CommunityGalleryImageVersionsClientListOptions) *runtime.Pager[armcompute.CommunityGalleryImageVersionsClientListResponse] {
+	c.Locations.Append(&location)
 	pagingHandler := runtime.PagingHandler[armcompute.CommunityGalleryImageVersionsClientListResponse]{
 		More: func(page armcompute.CommunityGalleryImageVersionsClientListResponse) bool {
 			return false
@@ -57,4 +60,5 @@ func (c *CommunityGalleryImageVersionsAPI) Reset() {
 		return
 	}
 	c.ImageVersions.Reset()
+	c.Locations.Reset()
 }

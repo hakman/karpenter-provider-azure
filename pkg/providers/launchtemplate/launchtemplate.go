@@ -153,6 +153,9 @@ func (p *Provider) getStaticParameters(
 	}
 
 	subnetID := lo.Ternary(nodeClass.Spec.VNETSubnetID != nil, lo.FromPtr(nodeClass.Spec.VNETSubnetID), options.FromContext(ctx).SubnetID)
+	// A subnet in an additional VNet can be in a location other than the cluster's
+	additionalLocation, _ := options.FromContext(ctx).AdditionalVNETLocationOfSubnetID(nodeClass.Spec.VNETSubnetID)
+	location := lo.CoalesceOrEmpty(additionalLocation, p.location)
 	baseLabels, err := karplabels.Get(ctx, nodeClass, arch, instanceType.Requirements)
 	if err != nil {
 		return nil, err
@@ -190,7 +193,7 @@ func (p *Provider) getStaticParameters(
 		SubscriptionID:                 p.subscriptionID,
 		KubeletIdentityClientID:        p.kubeletIdentityClientID,
 		ResourceGroup:                  p.resourceGroup,
-		Location:                       p.location,
+		Location:                       location,
 		NetworkSecurityGroupName:       nsgName,
 		RouteTableName:                 routeTableName,
 		APIServerName:                  options.FromContext(ctx).GetAPIServerName(),

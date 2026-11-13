@@ -106,6 +106,10 @@ func (o *Options) validateAdditionalVNETs() error {
 	if len(o.AdditionalVNETs) == 0 {
 		return nil
 	}
+	if o.IsAKSMachineAPIMode() {
+		// AKS only creates machines in the cluster VNet
+		return fmt.Errorf("additional-vnets is not supported with provision mode %q", o.ProvisionMode)
+	}
 	clusterSubnet, err := utils.GetVnetSubnetIDComponents(o.SubnetID)
 	if err != nil {
 		return nil //nolint:nilerr // reported by validateVnetSubnetID

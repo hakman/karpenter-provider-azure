@@ -26,7 +26,6 @@ import (
 
 	"github.com/Azure/karpenter-provider-azure/pkg/apis/v1beta1"
 	"github.com/Azure/karpenter-provider-azure/pkg/operator/options"
-	"github.com/Azure/karpenter-provider-azure/pkg/utils"
 )
 
 // RegionalProvider provides the instance types of the cluster location and, for node classes whose subnet is
@@ -87,14 +86,7 @@ func (p *RegionalProvider) Reset() {
 }
 
 func (p *RegionalProvider) forNodeClass(ctx context.Context, nodeClass *v1beta1.AKSNodeClass) *DefaultProvider {
-	if len(p.additional) == 0 || nodeClass.Spec.VNETSubnetID == nil {
-		return p.DefaultProvider
-	}
-	subnet, err := utils.GetVnetSubnetIDComponents(*nodeClass.Spec.VNETSubnetID)
-	if err != nil {
-		return p.DefaultProvider
-	}
-	location, _ := options.FromContext(ctx).AdditionalVNETLocation(subnet)
+	location, _ := options.FromContext(ctx).AdditionalVNETLocationOfSubnetID(nodeClass.Spec.VNETSubnetID)
 	if provider, ok := p.additional[strings.ToLower(location)]; ok {
 		return provider
 	}

@@ -353,6 +353,26 @@ var _ = Describe("Options", func() {
 			Entry("an empty location", "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/sillygeese/providers/Microsoft.Network/virtualNetworks/remote-vnet=", "must be the vnet location"),
 			Entry("a key that is not a vnet resource ID", "remote-vnet=otherregion", "is not a valid vnet resource ID"),
 		)
+		DescribeTable("should reject additional-vnets with an AKS Machine API provision mode", func(mode string) {
+			err := opts.Parse(
+				fs,
+				"--cluster-name", "my-name",
+				"--cluster-endpoint", "https://karpenter-000000000000.hcp.westus2.staging.azmk8s.io",
+				"--kubelet-bootstrap-token", "flag-bootstrap-token",
+				"--ssh-public-key", "flag-ssh-public-key",
+				"--vnet-subnet-id", "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/sillygeese/providers/Microsoft.Network/virtualNetworks/karpentervnet/subnets/karpentersub",
+				"--node-resource-group", "my-node-rg",
+				"--provision-mode", mode,
+				"--aks-machines-pool-name", "mpool",
+				"--use-sig",
+				"--sig-subscription-id", "92345678-1234-1234-1234-123456789012",
+				"--additional-vnets", "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/sillygeese/providers/Microsoft.Network/virtualNetworks/remote-vnet=otherregion",
+			)
+			Expect(err).To(MatchError(ContainSubstring("additional-vnets is not supported with provision mode")))
+		},
+			Entry("aksmachineapi", consts.ProvisionModeAKSMachineAPI),
+			Entry("aksmachineapiheaderbatch", consts.ProvisionModeAKSMachineAPIHeaderBatch),
+		)
 
 		It("should fail when vnet guid is not a uuid", func() {
 			errMsg := "vnet-guid null is malformed"

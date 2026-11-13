@@ -32,6 +32,8 @@ type NodeImageVersionsAPI struct {
 	// Error allows tests to simulate API errors.
 	// If Error is set to non-nil, it will take precedence over other fake data
 	Error error
+	// Locations records the location of each List call
+	Locations AtomicPtrSlice[string]
 }
 
 var _ types.NodeImageVersionsAPI = &NodeImageVersionsAPI{}
@@ -442,9 +444,11 @@ var (
 func (n *NodeImageVersionsAPI) Reset() {
 	n.OverrideNodeImageVersions = nil
 	n.Error = nil
+	n.Locations.Reset()
 }
 
-func (n *NodeImageVersionsAPI) List(_ context.Context, _ string) ([]*armcontainerservice.NodeImageVersion, error) {
+func (n *NodeImageVersionsAPI) List(_ context.Context, location string) ([]*armcontainerservice.NodeImageVersion, error) {
+	n.Locations.Append(&location)
 	// Error takes precedence over other fake data
 	if n.Error != nil {
 		return nil, n.Error

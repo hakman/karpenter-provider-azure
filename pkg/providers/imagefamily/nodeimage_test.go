@@ -97,6 +97,7 @@ var _ = Describe("NodeImageProvider tests", func() {
 	var (
 		testOptions               *options.Options
 		communityImageVersionsAPI *fake.CommunityGalleryImageVersionsAPI
+		nodeImageVersionsAPI      *fake.NodeImageVersionsAPI
 
 		nodeImageProvider imagefamily.NodeImageProvider
 		nodeClass         *v1beta1.AKSNodeClass
@@ -111,7 +112,7 @@ var _ = Describe("NodeImageProvider tests", func() {
 		communityImageVersionsAPI = &fake.CommunityGalleryImageVersionsAPI{}
 		cigImageVersionTest := cigImageVersion
 		communityImageVersionsAPI.ImageVersions.Append(&armcompute.CommunityGalleryImageVersion{Name: &cigImageVersionTest})
-		nodeImageVersionsAPI := &fake.NodeImageVersionsAPI{}
+		nodeImageVersionsAPI = &fake.NodeImageVersionsAPI{}
 		nodeImageProvider = imagefamily.NewProvider(communityImageVersionsAPI, fake.Region, customerSubscription, nodeImageVersionsAPI, cache.New(imagefamily.ImageExpirationInterval, imagefamily.ImageCacheCleaningInterval))
 		kubernetesVersion = lo.Must(env.KubernetesInterface.Discovery().ServerVersion()).String()
 
@@ -715,5 +716,38 @@ var _ = Describe("NodeImageProvider tests", func() {
 			expectedImages = renderExpectedCIGNodeImages(azFam, nodeClass.Spec.FIPSMode, laterCIGImageVersionTest, nodeClass.IsTrustedLaunchEnabled())
 			Expect(foundImages).To(Equal(expectedImages))
 		})
+	})
+
+	Context("Additional VNet in another location", func() {
+		const additionalVNETID = "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/remote-rg/providers/Microsoft.Network/virtualNetworks/remote-vnet"
+		const additionalLocation = "otherregion"
+
+		DescribeTable("should list the image versions of the location of the node class",
+			func(useSIG bool) {
+				testOptions = options.FromContext(ctx)
+				testOptions.AdditionalVNETs = map[string]string{additionalVNETID: additionalLocation}
+				testOptions.UseSIG = useSIG
+				testOptions.SIGSubscriptionID = sigSubscription
+				ctx = options.ToContext(ctx, testOptions)
+
+				calls := lo.Ternary(useSIG, &nodeImageVersionsAPI.Locations, &communityImageVersionsAPI.Locations)
+				locations := func() []string {
+					return lo.Times(calls.Len(), func(i int) string { return lo.FromPtr(calls.Get(i)) })
+				}
+
+				_, err := nodeImageProvider.List(ctx, nodeClass)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(locations()).To(HaveEach(fake.Region))
+
+				// the images cached for the cluster location must not be used for another location
+				calls.Reset()
+				nodeClass.Spec.VNETSubnetID = lo.ToPtr(additionalVNETID + "/subnets/nodes")
+				_, err = nodeImageProvider.List(ctx, nodeClass)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(locations()).To(HaveEach(additionalLocation))
+			},
+			Entry("from the community image gallery", false),
+			Entry("from the shared image gallery", true),
+		)
 	})
 })
