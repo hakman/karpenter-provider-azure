@@ -4,9 +4,9 @@
 // NAT gateway and a network security group, and peers the VNet with the cluster VNet and with every other
 // additional VNet.
 //
-// This is all the network needs when WireGuard with node encryption carries the traffic between nodes,
-// as described in the example: Azure then only sees traffic between node IPs. Enabling that on the
-// cluster is not covered here.
+// This is all the network needs when WireGuard carries the pod traffic between nodes, as described in
+// the example: Azure then only sees traffic between node IPs. Enabling that on the cluster is not
+// covered here.
 
 @description('Name of the cluster VNet, in this resource group')
 param clusterVnetName string

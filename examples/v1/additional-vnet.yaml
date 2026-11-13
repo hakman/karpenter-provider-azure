@@ -11,15 +11,21 @@
 # - The VNet is peered with the cluster VNet, and its subnet has its own outbound connectivity
 #   (for example a NAT gateway) and network security group. hack/azure/additional-vnets.bicep
 #   creates such VNets and outputs the value for --additional-vnets.
-# - Traffic between nodes in different VNets is carried by WireGuard with node encryption, so that
-#   Azure only sees traffic between node IPs and no routes for pod CIDRs are needed:
+# - Pod traffic between nodes in different VNets is carried by WireGuard, so that Azure only sees
+#   traffic between node IPs and no routes for pod CIDRs are needed:
 #     az aks update --resource-group <resource-group> --name <cluster> --enable-acns \
 #       --acns-transit-encryption-type WireGuard --output none
-#     kubectl -n kube-system patch configmap cilium-config --type merge -p '{"data":{"encrypt-node":"true"}}'
-#     kubectl -n kube-system rollout restart daemonset cilium
-#   AKS does not support changes to cilium-config and may reset it, for example on upgrade. Without
-#   encrypt-node only pod-to-pod traffic crosses the VNets: host-to-pod and NodePort traffic does not.
 # - Replace the vnetSubnetID below.
+#
+# Limitations: WireGuard only carries traffic that starts and ends in a pod. Between different VNets:
+# - Nodes and host-network pods cannot reach pods, directly or through a Service.
+# - NodePort and LoadBalancer Services with externalTrafficPolicy: Cluster cannot forward to pods.
+#   Keep the pods of such Services in the VNet where the traffic enters.
+# - DNS fails for pods on these nodes that are selected by a network policy with DNS rules (toFQDNs):
+#   the DNS proxy on the node forwards their queries from the host network. For the same reason
+#   leave spec.localDNS unset (not tested).
+# Cilium node encryption (encrypt-node) would lift these limits. It is not used here: it needs an edit
+# to the AKS-managed cilium-config, fragments traffic between nodes, and is deprecated in Cilium.
 ---
 apiVersion: karpenter.sh/v1
 kind: NodePool
