@@ -453,6 +453,60 @@ var _ = Describe("InstanceType Provider", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(onDemandAvailable(instanceTypes, *defaultTestSKU.Name)).To(BeTrue())
 			})
+			It("should track quota across VM create and delete in the location of the node", func() {
+				available := func(nodeClass *v1beta1.AKSNodeClass) bool {
+					GinkgoHelper()
+					instanceTypes, err := azureEnvAdditional.InstanceTypesProvider.List(ctx, nodeClass)
+					Expect(err).ToNot(HaveOccurred())
+					return onDemandAvailable(instanceTypes, *defaultTestSKU.Name)
+				}
+				// both locations have quota left for exactly one VM
+				vCPUs := lo.Must(defaultTestSKU.VCPU())
+				for _, usageAPI := range []*fake.UsageAPI{azureEnvAdditional.UsageAPI, azureEnvAdditional.AdditionalUsageAPIs[fake.Region]} {
+					usageAPI.Usages.Append(&armcompute.Usage{
+						Name:         &armcompute.UsageName{Value: lo.ToPtr(defaultTestSKU.GetFamilyName())},
+						CurrentValue: lo.ToPtr(int32(100 - vCPUs)),
+						Limit:        lo.ToPtr[int64](100),
+					})
+				}
+				Expect(azureEnvAdditional.QuotaProvider.Update(ctx)).To(Succeed())
+				Expect(azureEnvAdditional.AdditionalQuotaProviders[fake.Region].Update(ctx)).To(Succeed())
+
+				nodeClaim := coretest.NodeClaim(karpv1.NodeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: map[string]string{
+							karpv1.NodePoolLabelKey: nodePool.Name,
+						},
+					},
+					Spec: karpv1.NodeClaimSpec{
+						NodeClassRef: &karpv1.NodeClassReference{
+							Name:  nodeClass.Name,
+							Group: object.GVK(nodeClass).Group,
+							Kind:  object.GVK(nodeClass).Kind,
+						},
+						Requirements: []karpv1.NodeSelectorRequirementWithMinValues{
+							{Key: v1.LabelInstanceTypeStable, Operator: v1.NodeSelectorOpIn, Values: []string{*defaultTestSKU.Name}},
+							{Key: karpv1.CapacityTypeLabelKey, Operator: v1.NodeSelectorOpIn, Values: []string{karpv1.CapacityTypeOnDemand}},
+						},
+					},
+				})
+				ExpectApplied(ctx, env.Client, nodePool, nodeClass, nodeClaim)
+				nodeClaim = ExpectExists(ctx, env.Client, nodeClaim)
+
+				// the create consumes the quota of the location of the additional VNet, not of the cluster location
+				created, err := CreateAndWaitForPromises(ctx, cloudProviderAdditional, azureEnvAdditional, nodeClaim)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(available(nodeClass)).To(BeFalse())
+				Expect(available(clusterNodeClass)).To(BeTrue())
+
+				// the delete releases it there
+				nodeClaim.Status = created.Status
+				nodeClaim.Labels = created.Labels
+				nodeClaim.Annotations = created.Annotations
+				Expect(cloudProviderAdditional.Delete(ctx, nodeClaim)).To(Succeed())
+				Expect(available(nodeClass)).To(BeTrue())
+				Expect(available(clusterNodeClass)).To(BeTrue())
+			})
 		})
 		Context("VM Creation Failures", func() {
 			It("should not reattempt creation of a vm thats been created before", func() {

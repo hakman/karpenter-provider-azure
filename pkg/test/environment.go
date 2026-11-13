@@ -121,6 +121,10 @@ type Environment struct {
 	AllocationStrategyProvider   allocationstrategy.Provider
 	QuotaProvider                *quota.DefaultProvider
 
+	// The usage API fakes and quota providers of the locations of additional VNets, keyed by location
+	AdditionalUsageAPIs      map[string]*fake.UsageAPI
+	AdditionalQuotaProviders map[string]*quota.DefaultProvider
+
 	InstanceTypeStore *nodeoverlay.InstanceTypeStore
 
 	// Settings
@@ -189,13 +193,17 @@ func NewRegionalEnvironment(ctx context.Context, env *coretest.Environment, regi
 	// Like the operator, give each location of an additional VNet its own instance types, quota and unavailable offerings
 	additionalInstanceTypeProviders := map[string]*instancetype.DefaultProvider{}
 	additionalLocations := map[string]instance.AdditionalLocation{}
+	additionalUsageAPIs := map[string]*fake.UsageAPI{}
+	additionalQuotaProviders := map[string]*quota.DefaultProvider{}
 	for _, location := range testOptions.AdditionalVNETs {
 		if _, ok := additionalLocations[location]; ok || location == region {
 			continue
 		}
+		additionalUsageAPIs[location] = &fake.UsageAPI{}
+		additionalQuotaProviders[location] = quota.NewProvider(additionalUsageAPIs[location], quotaCategoryVMFamilyMappingAPI, location, clock.RealClock{})
 		additionalLocations[location] = instance.AdditionalLocation{
 			UnavailableOfferings: azurecache.NewUnavailableOfferings(),
-			QuotaProvider:        quota.NewProvider(&fake.UsageAPI{}, quotaCategoryVMFamilyMappingAPI, location, clock.RealClock{}),
+			QuotaProvider:        additionalQuotaProviders[location],
 		}
 		additionalInstanceTypeProviders[location] = instancetype.NewDefaultProvider(
 			location,
@@ -405,6 +413,9 @@ func NewRegionalEnvironment(ctx context.Context, env *coretest.Environment, regi
 		AllocationStrategyProvider:   allocationStrategyProvider,
 		QuotaProvider:                quotaProvider,
 
+		AdditionalUsageAPIs:      additionalUsageAPIs,
+		AdditionalQuotaProviders: additionalQuotaProviders,
+
 		InstanceTypeStore: store,
 
 		nonZonal:       nonZonal,
@@ -440,6 +451,10 @@ func (env *Environment) Reset(ctx context.Context) {
 	env.QuotaCategoryVMFamilyMappingAPI.Reset()
 	env.SKUMixPlacementScoresAPI.Reset()
 	env.QuotaProvider.Reset()
+	for location := range env.AdditionalQuotaProviders {
+		env.AdditionalUsageAPIs[location].Reset()
+		env.AdditionalQuotaProviders[location].Reset()
+	}
 
 	env.KubernetesVersionCache.Flush()
 	env.NodeImagesCache.Flush()
