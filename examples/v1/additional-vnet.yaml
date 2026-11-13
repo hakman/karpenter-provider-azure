@@ -133,7 +133,7 @@ spec:
       containers:
       - name: cni-config
         # any image with sh, curl, sed and grep works
-        image: registry.k8s.io/e2e-test-images/agnhost:2.53
+        image: mcr.microsoft.com/azurelinux/base/core:3.0
         env:
         - name: NODE_NAME
           valueFrom:
@@ -145,23 +145,49 @@ spec:
         - |
           set -u
           conf=/host/etc/cni/net.d/05-cilium.conflist
+          # the pod CIDR this node was set up with; the container runtime ignores this file
+          state=/host/etc/cni/net.d/additional-vnet-cni.subnet
           sa=/var/run/secrets/kubernetes.io/serviceaccount
           url="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}/apis/acn.azure.com/v1alpha/namespaces/kube-system/nodenetworkconfigs/${NODE_NAME}"
+          write() {
+            printf '{\n\t"cniVersion": "0.3.1",\n\t"name": "cilium",\n\t"plugins": [\n\t\t{\n\t\t\t"type": "cilium-cni",\n\t\t\t"ipam": {\n\t\t\t\t"type": "host-local",\n\t\t\t\t"ranges": [[{"subnet": "%s"}]]\n\t\t\t},\n\t\t\t"log-file": "/var/log/cilium-cni.log"\n\t\t}\n\t]\n}\n' "$1" > "$conf.tmp" &&
+              mv "$conf.tmp" "$conf"
+          }
           while true; do
-            # leave the file alone if azure-cns wrote it: that node has a working overlay network
-            if ! grep -q '"azure-ipam"' "$conf" 2>/dev/null; then
-              cidr=$(curl -sS --max-time 10 --cacert "$sa/ca.crt" -H "Authorization: Bearer $(cat "$sa/token")" "$url" |
-                sed -n 's/.*"primaryIP": *"\([^"]*\)".*/\1/p' | head -n 1)
-              if [ -z "$cidr" ]; then
-                echo "no pod CIDR reserved for ${NODE_NAME} yet"
-              elif ! grep -q "\"$cidr\"" "$conf" 2>/dev/null; then
-                printf '{\n\t"cniVersion": "0.3.1",\n\t"name": "cilium",\n\t"plugins": [\n\t\t{\n\t\t\t"type": "cilium-cni",\n\t\t\t"ipam": {\n\t\t\t\t"type": "host-local",\n\t\t\t\t"ranges": [[{"subnet": "%s"}]]\n\t\t\t},\n\t\t\t"log-file": "/var/log/cilium-cni.log"\n\t\t}\n\t]\n}\n' "$cidr" > "$conf.tmp"
-                mv "$conf.tmp" "$conf"
-                echo "wrote $conf with host-local range $cidr"
+            reserved=$(curl -sS -f --max-time 10 --cacert "$sa/ca.crt" -H "Authorization: Bearer $(cat "$sa/token")" "$url" |
+              grep -o '"primaryIP": *"[^"]*"' | sed 's/.*"\([^"]*\)"$/\1/')
+            # anything but a single CIDR is not usable
+            case "$reserved" in *[!0-9./]*) reserved="" ;; esac
+            if [ -f "$state" ]; then
+              # A node keeps the pod CIDR and the IPAM plugin it started with, because its pods have
+              # addresses from them: restore the file if something else replaced it, and never follow
+              # a change of the reserved pod CIDR.
+              subnet=$(cat "$state")
+              if ! grep -q "\"$subnet\"" "$conf" 2>/dev/null; then
+                write "$subnet" && echo "restored $conf with host-local range $subnet"
               fi
+              if [ -n "$reserved" ] && [ "$reserved" != "$subnet" ]; then
+                echo "ERROR: the pod CIDR reserved for ${NODE_NAME} changed from $subnet to $reserved; replace the node"
+                rm -f /tmp/ready
+              else
+                touch /tmp/ready
+              fi
+            elif grep -q '"azure-ipam"' "$conf" 2>/dev/null; then
+              # azure-cns wrote the file first: that node has a working overlay network
+              touch /tmp/ready
+            elif [ -n "$reserved" ]; then
+              write "$reserved" && echo "$reserved" > "$state" && touch /tmp/ready &&
+                echo "wrote $conf with host-local range $reserved"
+            else
+              echo "no pod CIDR reserved for ${NODE_NAME} yet"
             fi
             sleep 30
           done
+        # not ready means the node has no CNI configuration yet, or its reserved pod CIDR changed
+        readinessProbe:
+          exec:
+            command: ["test", "-f", "/tmp/ready"]
+          periodSeconds: 30
         resources:
           requests:
             cpu: 5m
